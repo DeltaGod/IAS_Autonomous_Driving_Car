@@ -13,12 +13,16 @@ def decode_action(row):
     v_left = row['speedA']
     v_right = row['speedB']
     
-    # Lógica de decisión
-    if v_left == 0 and v_right == 0:
+    # REGLA 1: La verdad del hardware (Puente H)
+    puente_izq_apagado = not (left_fwd or left_bwd)
+    puente_der_apagado = not (right_fwd or right_bwd)
+    
+    if puente_izq_apagado and puente_der_apagado:
+        # Freno total físico, ignoramos el remanente del PWM
         return 'Freno_Total'
         
+    # REGLA 2: Movimiento hacia adelante
     elif left_fwd and right_fwd:
-        # Ambos hacia adelante, definimos el giro por la diferencia de velocidades
         if v_left > v_right:
             return 'Giro_Derecha_Avanzando'
         elif v_right > v_left:
@@ -26,15 +30,17 @@ def decode_action(row):
         else:
             return 'Adelante_Recto'
             
+    # REGLA 3: Marcha atrás pura
     elif left_bwd and right_bwd:
         return 'Reversa'
         
-    # Giros sobre el propio eje (Tank turn)
+    # REGLA 4: Giros sobre el propio eje (Tank turn)
     elif left_fwd and right_bwd:
         return 'Giro_Derecha_Eje'
     elif right_fwd and left_bwd:
         return 'Giro_Izquierda_Eje'
         
+    # REGLA 5: Errores de lectura o estados prohibidos del puente H
     else:
         return 'Accion_Compleja/Transicion'
 
