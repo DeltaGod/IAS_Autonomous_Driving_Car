@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
+from scipy import stats
 
 # Configurar el estilo de los gráficos
 sns.set_style("whitegrid")
@@ -89,7 +90,7 @@ axes[0, 1].grid(True, alpha=0.3)
 
 # Gráfico de densidad
 axes[1, 0].hist(all_diffs_array, bins=50, density=True, color='steelblue', alpha=0.6, edgecolor='black')
-from scipy import stats
+
 mu, sigma = np.mean(all_diffs_array), np.std(all_diffs_array)
 x = np.linspace(all_diffs_array.min(), all_diffs_array.max(), 100)
 axes[1, 0].plot(x, stats.norm.pdf(x, mu, sigma), 'r-', linewidth=2, label='Distribución Normal')
