@@ -8,8 +8,8 @@ from pathlib import Path
 sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (14, 10)
 
-# Ruta base del dataset
-dataset_path = Path("/home/wopassord/Documents/ENIB/S9/IAS/Autonomous_Driving/DataSet/Records (1)")
+# Ruta base del dataset (relativa al script)
+dataset_path = Path(__file__).parent / "DataSet" / "Records (1)"
 
 # Obtener todas las carpetas de registros
 record_folders = sorted([f for f in dataset_path.iterdir() if f.is_dir() and f.name.startswith("#Record")])
@@ -114,8 +114,10 @@ axes[1, 1].set_xticklabels(record_names, rotation=45, ha='right', fontsize=8)
 axes[1, 1].grid(True, alpha=0.3, axis='y')
 
 plt.tight_layout()
-plt.savefig("/home/wopassord/Documents/ENIB/S9/IAS/Autonomous_Driving/analisis_tiempos.png", dpi=300, bbox_inches='tight')
-print("Gráfico guardado en: analisis_tiempos.png")
+# Guardar gráfico en la carpeta del proyecto
+output_path = Path(__file__).parent / "analisis_tiempos.png"
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
+print(f"Gráfico guardado en: {output_path}")
 plt.show()
 
 # Tabla resumen
@@ -124,5 +126,6 @@ print("TABLA RESUMEN POR REGISTRO")
 print("="*60)
 df_resumen = pd.DataFrame(results_by_record).T
 print(df_resumen.to_string())
-df_resumen.to_csv("/home/wopassord/Documents/ENIB/S9/IAS/Autonomous_Driving/resumen_tiempos.csv")
-print("\nTabla guardada en: resumen_tiempos.csv")
+csv_path = Path(__file__).parent / "resumen_tiempos.csv"
+df_resumen.to_csv(csv_path)
+print(f"\nTabla guardada en: {csv_path}")
