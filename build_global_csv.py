@@ -83,7 +83,7 @@ def interpolate(t, cmds, cmd_times):
     return tuple(a[1 + k] + (b[1 + k] - a[1 + k]) * w for k in range(6))
 
 
-def process_record(record_dir):
+def process_record(record_dir, dataset_dir):
     record = os.path.basename(record_dir)
     images_dir = os.path.join(record_dir, "Images")
     csv_path = os.path.join(record_dir, "labels.csv")
@@ -137,6 +137,7 @@ def process_record(record_dir):
         sa, sb, g1, g2, g3, g4 = fields
         sa, sb = apply_brake_rule(sa, sb, g1, g2, g3, g4)  # re-aplicar freno tras interpolar
         rows.append({
+            "image_path": os.path.join(dataset_dir, record, "Images", f"{ts}.png"),
             "time_in_ms": ts,
             "speedA": round(sa, 1),
             "speedB": round(sb, 1),
@@ -168,11 +169,11 @@ def main():
     print(f"Sesiones encontradas: {len(record_dirs)}")
     all_rows = []
     for rd in record_dirs:
-        rows, n_cmd, n_interp = process_record(rd)
+        rows, n_cmd, n_interp = process_record(rd, args.dataset_dir)
         print(f"  {os.path.basename(rd):30s} -> {len(rows):6d} imgs  (cmd: {n_cmd}, interp: {n_interp})")
         all_rows.extend(rows)
 
-    cols = ["time_in_ms", "speedA", "speedB", "GPIO1", "GPIO2", "GPIO3", "GPIO4",
+    cols = ["image_path", "time_in_ms", "speedA", "speedB", "GPIO1", "GPIO2", "GPIO3", "GPIO4",
             "behavior", "record", "source"]
     out = pd.DataFrame(all_rows, columns=cols)
     out.to_csv(args.output, index=False)
