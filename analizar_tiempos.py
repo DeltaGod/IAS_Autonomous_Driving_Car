@@ -10,12 +10,22 @@ sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (14, 10)
 
 # Ruta base del dataset (relativa al script)
-dataset_path = Path(__file__).parent / "DataSet" / "Records (1)"
+script_dir = Path(__file__).parent
+dataset_path = script_dir / "DataSet" / "Record_V2"
+
+if not dataset_path.exists():
+    raise FileNotFoundError(
+        f"No se encontró la carpeta del dataset en: {dataset_path}. "
+        "Verifica que exista DataSet/Record_V2."
+    )
 
 # Obtener todas las carpetas de registros
-record_folders = sorted([f for f in dataset_path.iterdir() if f.is_dir() and f.name.startswith("#Record")])
+record_folders = sorted([f for f in dataset_path.iterdir() if f.is_dir()])
 
 print(f"Se encontraron {len(record_folders)} registros\n")
+
+if not record_folders:
+    raise FileNotFoundError(f"No se encontraron carpetas de registros dentro de {dataset_path}")
 
 all_time_diffs = []
 results_by_record = {}
@@ -29,6 +39,14 @@ for folder in record_folders:
         
         # Leer el CSV
         df = pd.read_csv(csv_file, sep=";", nrows=10)  # Primeras 10 filas como mencionaste
+
+        if 'time_in_ms' not in df.columns:
+            print(f"  Se omite {folder.name}: no existe la columna 'time_in_ms' en {csv_file.name}\n")
+            continue
+
+        if len(df) < 2:
+            print(f"  Se omite {folder.name}: no hay suficientes filas para calcular diferencias\n")
+            continue
         
         # Calcular diferencias de tiempo entre registros consecutivos
         times = df['time_in_ms'].values
@@ -55,6 +73,9 @@ for folder in record_folders:
         print(f"  Mediana: {metrics['mediana_ms']:.2f} ms\n")
 
 # Estadísticas globales
+if not all_time_diffs:
+    raise ValueError("No se pudieron calcular diferencias de tiempo con los datos disponibles.")
+
 print("="*60)
 print("ESTADÍSTICAS GLOBALES (Todos los registros)")
 print("="*60)
@@ -101,9 +122,9 @@ axes[1, 0].legend()
 axes[1, 0].grid(True, alpha=0.3)
 
 # Estadísticas por registro
-record_names = [name.replace("#Record_", "") for name in results_by_record.keys()]
-promedios = [results_by_record[name]['promedio_ms'] for name in results_by_record.keys()]
-desv_estandar = [results_by_record[name]['desv_estandar_ms'] for name in results_by_record.keys()]
+record_names = list(results_by_record.keys())
+promedios = [results_by_record[name]['promedio_ms'] for name in record_names]
+desv_estandar = [results_by_record[name]['desv_estandar_ms'] for name in record_names]
 
 x_pos = np.arange(len(record_names))
 axes[1, 1].bar(x_pos, promedios, yerr=desv_estandar, capsize=5, color='steelblue', alpha=0.7, edgecolor='black')
