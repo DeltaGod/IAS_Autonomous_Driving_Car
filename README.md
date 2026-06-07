@@ -23,3 +23,23 @@ Esto es asi ya que el dirver internamente FRENA el motor si todos los GPIO de se
 
 La database esta MUY poblada por curvas a la IZQUIERDA, Se propone flipear en entrenamiento imagenes at random
 
+
+## 📐 Registro de Decisiones Técnicas (Design Log)
+
+Esta sección documenta las decisiones críticas tomadas durante el diseño del *pipeline* de datos y la arquitectura del modelo. Sirve como bitácora de depuración: si el comportamiento del vehículo en inferencia no es el esperado, estos son los puntos de control a revisar.
+
+### 1. Procesamiento de la Base de Datos (Data Pipeline)
+
+| Componente | Decisión Tomada | Justificación | Riesgo / Fallback |
+| :--- | :--- | :--- | :--- |
+| **Generación de Comandos** | **Interpolación Lineal** de valores PWM para imágenes sin comando directo. | Asegurar que cada *frame* tenga un comando asociado sin perder volumen de datos. | **Riesgo:** El modelo puede aprender a acelerar/frenar gradualmente (latencia artificial) en lugar de ser reactivo.<br>**Fallback:** Cambiar a *Forward-Fill* estricto. |
+| **Gestión de Freno (GPIO)** | **Retención de estado:** Los pines GPIO mantienen su dirección mientras la velocidad interpolada sea `> 0`. | Evita clasificar la desaceleración inercial como un estado de `STOP` absoluto, lo que sesgaría al modelo a no moverse. | N/A |
+| **Control de Latencia** | **Segmentación de Sesiones (*Chunking*):** Descarte de *frames* y corte de sesión si el $\Delta T > 1000ms$. | Previene el *Covariate Shift* temporal. Evita que la red intente aprender de saltos espaciales ("teletransportes"). | N/A |
+
+### 2. Estrategia de Entrenamiento (Deep Learning)
+
+| Componente | Decisión Tomada | Justificación | Riesgo / Fallback |
+| :--- | :--- | :--- | :--- |
+| **Balanceo de Clases** | **Mirroring Estocástico en *Runtime*:** Espejado de imágenes + inversión de comandos `speedA`/`speedB` y etiquetas. | Corrige el sesgo extremo del *dataset* original (giros a izquierda vs derecha) sin duplicar archivos en disco duro. | Verificar que no haya asimetrías físicas en el laboratorio que confundan a la red al ser espejadas. |
+| **Transfer Learning** | **Entrenamiento en Dos Fases:** 1. Congelar *backbone* de MobileNetV3. 2. *Unfreeze* total con bajo *Learning Rate*. | Previene el *Catastrophic Forgetting*. Evita que gradientes iniciales altos destruyan los pesos pre-entrenados en ImageNet. | Si la red no converge, ajustar el *Learning Rate Scheduler* (ej. StepLR). |
+| **Robustez Visual** | **Color Jittering Controlado:** Variación aleatoria de brillo y contraste durante la carga de *batches*. | Desvincula al modelo de las condiciones de iluminación exactas del momento de grabación. | Si se aplican valores muy altos, puede "quemar" la imagen y ocultar las líneas de la pista. Requiere *tuning* previo. |
