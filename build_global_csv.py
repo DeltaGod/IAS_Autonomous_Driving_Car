@@ -22,32 +22,20 @@ LOGICA
    exactos del comando.
 
 3) RECORTE DE BORDES: el piloto dejaba el auto quieto largos periodos ANTES del
-   primer comando y DESPUES del ultimo. Esas imagenes no representan ninguna
-   decision de manejo (no hay comando real que las respalde, solo clamp), asi que
-   se DESCARTAN: se conservan unicamente las imagenes entre la asociada al primer
-   comando real y la asociada al ultimo comando real (ambas inclusive).
+   primer comando y DESPUES del ultimo. Esas imagenes se DESCARTAN.
 
-4) INTERPOLACION: las imagenes sin comando asociado (dentro del rango util)
-   reciben las velocidades interpoladas linealmente por tiempo entre el comando
-   real anterior y el posterior. Los GPIO NO se interpolan como numeros: se les
-   asigna la DIRECCION del lado que se esta moviendo (ver punto 5).
+4) INTERPOLACION: las imagenes sin comando asociado reciben velocidades interpoladas.
+   Los GPIO reciben la DIRECCION del lado que se esta moviendo.
 
-5) GPIO EN INTERPOLADAS (frenado/arranque): si la velocidad interpolada de un
-   motor es > 0, ese motor sigue en movimiento aunque sea un frenado o un
-   arranque; se le mantiene la direccion del comando que lo tiene en marcha
-   (frenado -> comando previo; arranque desde STOP -> comando siguiente). Solo si
-   la velocidad interpolada es 0 sus GPIO van a (0,0). Asi un frenado NO se
-   decodifica erroneamente como STOP por el cruce del 0.5 al binarizar.
-   IMPORTANTE: esto aplica SOLO a filas interpoladas; las filas reales conservan
-   exactamente los GPIO del comando original.
+5) GPIO EN INTERPOLADAS: si la velocidad interpolada es > 0, se mantiene la direccion.
+   Solo si la velocidad interpolada es 0 sus GPIO van a (0,0).
 
-6) Decodificar behavior SIN UMBRAL: un motor se considera parado solo si su
-   velocidad es 0. En los giros pivote un motor queda en velocidad 0 mientras el
-   otro sigue, asi que la direccion se decide con velocidad + GPIO.
+6) DECODIFICAR BEHAVIOR SIN UMBRAL: direccion decidida con velocidad + GPIO.
 
-Convencion de motores (L298N):
-  - motor IZQ: (GPIO1,GPIO2) = (1,0) adelante ; (0,1) atras
-  - motor DER: (GPIO3,GPIO4) = (0,1) adelante ; (1,0) atras
+7) FILTRO DE LATENCIA EXCESIVA (NUEVO): Si la diferencia de tiempo entre dos frames
+   consecutivos es mayor a 1000ms, se descarta el frame para evitar alucinaciones
+   por saltos temporales/teletransportes y se generan en el csv distintas "sesiones" de trabajo
+   (para respetar los tiempos de guardado originales, sino habría que meter un offset)
 """
 
 import argparse
@@ -57,6 +45,7 @@ from bisect import bisect_left, bisect_right
 
 import pandas as pd
 
+MAX_DELAY_MS = 1000  # Umbral máximo para considerar que hubo un salto/teletransporte
 
 def apply_brake_rule(sa, sb, g1, g2, g3, g4):
     """Si los 4 GPIO (redondeados) estan en 0 -> motor frenado -> velocidades a 0."""
@@ -64,13 +53,8 @@ def apply_brake_rule(sa, sb, g1, g2, g3, g4):
         return 0.0, 0.0
     return sa, sb
 
-
 def decode_behavior(sa, sb, g1, g2, g3, g4):
-    """
-    Comportamiento a partir de velocidad + GPIO, SIN umbral.
-    Un motor con velocidad 0 esta parado aunque su GPIO marque un sentido
-    (asi se hacen los giros pivote en esta data).
-    """
+    """Comportamiento a partir de velocidad + GPIO, SIN umbral."""
     G1, G2, G3, G4 = (int(round(g1)), int(round(g2)), int(round(g3)), int(round(g4)))
     l = 0 if sa <= 0 else (1 if (G1, G2) == (1, 0) else (-1 if (G1, G2) == (0, 1) else 0))
     r = 0 if sb <= 0 else (1 if (G3, G4) == (0, 1) else (-1 if (G3, G4) == (1, 0) else 0))
@@ -80,18 +64,10 @@ def decode_behavior(sa, sb, g1, g2, g3, g4):
         return "FORWARD"
     if l < 0 and r < 0:
         return "BACKWARD"
-    # diff > 0 => motor izq empuja mas => gira a la derecha
     return "RIGHT" if (l - r) > 0 else "LEFT"
 
-
 def pick_dir(speed_i, sa_a, dir_a, sa_b, dir_b):
-    """
-    Direccion (par de GPIO) de un motor en una imagen INTERPOLADA.
-    - speed_i <= 0  -> motor parado -> (0, 0)
-    - speed_i  > 0  -> motor en marcha (incluye frenado/arranque): se toma la
-      direccion del lado que realmente se mueve. Frenado: el comando previo (a)
-      tiene velocidad > 0; arranque desde STOP: la tiene el siguiente (b).
-    """
+    """Direccion (par de GPIO) de un motor en una imagen INTERPOLADA."""
     if speed_i <= 0:
         return (0, 0)
     if sa_a > 0 and dir_a != (0, 0):
@@ -100,19 +76,13 @@ def pick_dir(speed_i, sa_a, dir_a, sa_b, dir_b):
         return dir_b
     return (0, 0)
 
-
 def interp_fields(t, cmds, cmd_times):
-    """
-    Interpola los campos del comando en el tiempo t para una imagen sin comando.
-    Velocidades: interpolacion lineal por tiempo entre el comando previo y el
-    siguiente. GPIO: asignados con pick_dir (NO interpolacion numerica binarizada).
-    Devuelve (sa, sb, g1, g2, g3, g4) con velocidades redondeadas a 1 decimal.
-    """
-    hi = bisect_left(cmd_times, t)  # primer comando con tiempo >= t
-    if hi == 0:                     # clamp (no deberia ocurrir tras recortar bordes)
+    """Interpola los campos del comando en el tiempo t para una imagen sin comando."""
+    hi = bisect_left(cmd_times, t)
+    if hi == 0:
         c = cmds[0]
         return (round(c[1], 1), round(c[2], 1), c[3], c[4], c[5], c[6])
-    if hi >= len(cmds):             # clamp (idem)
+    if hi >= len(cmds):
         c = cmds[-1]
         return (round(c[1], 1), round(c[2], 1), c[3], c[4], c[5], c[6])
 
@@ -125,16 +95,13 @@ def interp_fields(t, cmds, cmd_times):
     g3, g4 = pick_dir(sb, a[2], (a[5], a[6]), b[2], (b[5], b[6]))
     return (sa, sb, g1, g2, g3, g4)
 
-
 def process_record(record_dir, dataset_dir):
     record = os.path.basename(record_dir)
     images_dir = os.path.join(record_dir, "Images")
     csv_path = os.path.join(record_dir, "labels.csv")
     if not os.path.isdir(images_dir) or not os.path.isfile(csv_path):
-        print(f"  [!] {record}: falta Images/ o labels.csv, se omite")
-        return [], 0, 0, 0
+        return [], 0, 0, 0, 0
 
-    # --- comandos: leer, ordenar, aplicar correccion de freno ---
     df = pd.read_csv(csv_path, sep=";").sort_values("time_in_ms").reset_index(drop=True)
     cmds = []
     for _, row in df.iterrows():
@@ -144,7 +111,6 @@ def process_record(record_dir, dataset_dir):
         cmds.append((float(row.time_in_ms), sa, sb, g1, g2, g3, g4))
     cmd_times = [c[0] for c in cmds]
 
-    # --- imagenes ordenadas por timestamp ---
     imgs = []
     for fn in os.listdir(images_dir):
         if fn.lower().endswith(".png"):
@@ -154,29 +120,42 @@ def process_record(record_dir, dataset_dir):
                 continue
             imgs.append(ts)
     imgs.sort()
+    
     if not imgs or not cmds:
-        return [], 0, 0, 0
+        return [], 0, 0, 0, 0
 
-    # --- asociacion directa: cada comando -> imagen anterior mas cercana ---
-    direct = {}  # indice de imagen -> campos del comando (ultimo gana si colisionan)
+    direct = {}
     for c in cmds:
-        j = bisect_right(imgs, c[0]) - 1  # ultima imagen con ts <= tiempo del comando
+        j = bisect_right(imgs, c[0]) - 1
         if j >= 0:
             direct[j] = c[1:]
+    
     if not direct:
-        print(f"  [!] {record}: ningun comando tiene imagen anterior, se omite")
-        return [], 0, 0, 0
+        return [], 0, 0, 0, 0
 
-    # --- RECORTE DE BORDES: conservar solo [primer comando real .. ultimo comando real] ---
-    first_idx = min(direct)  # imagen asociada al primer comando real
-    last_idx = max(direct)   # imagen asociada al ultimo comando real
-    n_dropped = first_idx + (len(imgs) - 1 - last_idx)
+    first_idx = min(direct)
+    last_idx = max(direct)
+    n_dropped_bordes = first_idx + (len(imgs) - 1 - last_idx)
 
-    # --- una fila por imagen, dentro del rango util ---
     rows = []
-    n_cmd = n_interp = 0
+    n_cmd = n_interp = n_dropped_delay = 0
+    last_ts = None
+    chunk_id = 1
+    current_record = f"{record}_seq{chunk_id}"
+
     for i in range(first_idx, last_idx + 1):
         ts = imgs[i]
+
+        # --- FILTRO DE LATENCIA Y SEGMENTACIÓN DE SESIONES ---
+        if last_ts is not None and (ts - last_ts) > MAX_DELAY_MS:
+            n_dropped_delay += 1
+            chunk_id += 1
+            current_record = f"{record}_seq{chunk_id}" # Cortamos la serie temporal aquí
+            last_ts = ts # Seteamos la nueva base de tiempo para el siguiente frame
+            continue # Eliminamos el frame de transición
+
+        last_ts = ts
+
         if i in direct:
             sa, sb, g1, g2, g3, g4 = direct[i]
             source = "real"
@@ -186,7 +165,7 @@ def process_record(record_dir, dataset_dir):
             source = "interp"
             n_interp += 1
 
-        sa, sb = apply_brake_rule(sa, sb, g1, g2, g3, g4)  # consistencia final
+        sa, sb = apply_brake_rule(sa, sb, g1, g2, g3, g4)
         rows.append({
             "image_path": os.path.join(dataset_dir, record, "Images", f"{ts}.png"),
             "time_in_ms": ts,
@@ -197,14 +176,14 @@ def process_record(record_dir, dataset_dir):
             "GPIO3": int(round(g3)),
             "GPIO4": int(round(g4)),
             "behavior": decode_behavior(sa, sb, g1, g2, g3, g4),
-            "record": record,
+            "record": current_record, # Inyectamos el nombre de sesión segmentado
             "source": source,
         })
-    return rows, n_cmd, n_interp, n_dropped
+    return rows, n_cmd, n_interp, n_dropped_bordes, n_dropped_delay
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Genera un CSV global imagen->comando con columna behavior.")
+    ap = argparse.ArgumentParser(description="Genera un CSV global imagen->comando con segmentación temporal.")
     ap.add_argument("--dataset-dir", default="DataSet", help="carpeta raiz con los Record_*")
     ap.add_argument("--output", default="dataset_global.csv", help="archivo de salida")
     args = ap.parse_args()
@@ -219,12 +198,15 @@ def main():
 
     print(f"Sesiones encontradas: {len(record_dirs)}")
     all_rows = []
-    total_dropped = 0
+    total_dropped_bordes = 0
+    total_dropped_delay = 0
+    
     for rd in record_dirs:
-        rows, n_cmd, n_interp, n_dropped = process_record(rd, args.dataset_dir)
-        total_dropped += n_dropped
+        rows, n_cmd, n_interp, n_drop_bordes, n_drop_delay = process_record(rd, args.dataset_dir)
+        total_dropped_bordes += n_drop_bordes
+        total_dropped_delay += n_drop_delay
         print(f"  {os.path.basename(rd):30s} -> {len(rows):6d} imgs  "
-              f"(cmd: {n_cmd}, interp: {n_interp}, bordes descartados: {n_dropped})")
+              f"(cmd: {n_cmd}, interp: {n_interp}, bordes desc.: {n_drop_bordes}, delays desc.: {n_drop_delay})")
         all_rows.extend(rows)
 
     cols = ["image_path", "time_in_ms", "speedA", "speedB", "GPIO1", "GPIO2", "GPIO3", "GPIO4",
@@ -234,11 +216,11 @@ def main():
 
     print("\n" + "=" * 60)
     print(f"CSV GLOBAL: {len(out)} filas -> {args.output}")
-    print(f"Imagenes de borde descartadas (auto quieto antes/despues): {total_dropped}")
+    print(f"Imágenes descartadas en bordes (inactividad): {total_dropped_bordes}")
+    print(f"Imágenes descartadas por saltos (>1s): {total_dropped_delay}")
     print("=" * 60)
-    print("\n-- Distribucion BEHAVIOR (%) --")
+    print("\n-- Distribución BEHAVIOR (%) --")
     print((out["behavior"].value_counts(normalize=True) * 100).round(1).to_string())
-
 
 if __name__ == "__main__":
     main()
