@@ -1,0 +1,19 @@
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0]
+/home/wopassord/Documents/ENIB/S9/IAS/IAS_Autonomous_Driving_Car/IAS_Autonomous_Driving_Car/.venv/lib64/python3.14/site-packages/pytorch_lightning/utilities/model_summary/model_summary.py:242: Precision 16-mixed is not supported by the model summary.  Estimated model size in MB will not be accurate. Using 32 bits instead.
+
+  | Name     | Type             | Params | Mode  | FLOPs
+--------------------------------------------------------------
+0 | backbone | MobileNetV3      | 1.5 M  | train | 0
+1 | loss_fn  | CrossEntropyLoss | 0      | train | 0
+--------------------------------------------------------------
+595 K     Trainable params
+927 K     Non-trainable params
+1.5 M     Total params
+6.092     Total estimated model params size (MB)
+210       Modules in train mode
+0         Modules in eval mode
+0         Total Flops
+Epoch 9: 100%|████████████| 375/375 [00:35<00:00, 10.42it/s, v_num=3sui, val_loss=1.360, val_acc=0.539, train_loss=0.854, train_acc=0.659]
+/home/wopassord/Documents/ENIB/S9/IAS/IAS_Autonomous_Driving_Car/IAS_Autonomous_Driving_Car/.venv/lib64/python3.14/site-packages/pytorch_lightning/utilities/_pytree.py:21: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+                                                                                                                                          
+`Trainer.fit` stopped: `max_epochs=10` reached.

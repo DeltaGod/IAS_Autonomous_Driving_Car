@@ -1,6 +1,7 @@
 /DataSet/
 /Autonomous_Driving_Car.pdf
 /.venv/
+/.env
 
 # Archivos de contexto de Claude
 /.claude/
