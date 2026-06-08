@@ -24,6 +24,17 @@ Esto es asi ya que el dirver internamente FRENA el motor si todos los GPIO de se
 La database esta MUY poblada por curvas a la IZQUIERDA, Se propone flipear en entrenamiento imagenes at random
 
 
+## 🚀 Entrenamiento y Modelos
+
+El entrenamiento se gestiona mediante `train_mobilenet.py` con logging integrado en **Weights & Biases**. 
+
+*   **Modelo Actual:** MobileNetV3-Small (V1.1)
+*   **Métrica Principal:** ~60% Val Accuracy.
+
+Para un análisis detallado de la evolución del modelo, hiperparámetros y diagnósticos de cada versión, consultá la bitácora completa:
+
+👉 **[TRAINING_LOG.md](./TRAINING_LOG.md)**
+
 ## 📐 Registro de Decisiones Técnicas (Design Log)
 
 Esta sección documenta las decisiones críticas tomadas durante el diseño del *pipeline* de datos y la arquitectura del modelo. Sirve como bitácora de depuración: si el comportamiento del vehículo en inferencia no es el esperado, estos son los puntos de control a revisar.
@@ -43,3 +54,6 @@ Esta sección documenta las decisiones críticas tomadas durante el diseño del 
 | **Balanceo de Clases** | **Mirroring Estocástico en *Runtime*:** Espejado de imágenes + inversión de comandos `speedA`/`speedB` y etiquetas. | Corrige el sesgo extremo del *dataset* original (giros a izquierda vs derecha) sin duplicar archivos en disco duro. | Verificar que no haya asimetrías físicas en el laboratorio que confundan a la red al ser espejadas. |
 | **Transfer Learning** | **Entrenamiento en Dos Fases:** 1. Congelar *backbone* de MobileNetV3. 2. *Unfreeze* total con bajo *Learning Rate*. | Previene el *Catastrophic Forgetting*. Evita que gradientes iniciales altos destruyan los pesos pre-entrenados en ImageNet. | Si la red no converge, ajustar el *Learning Rate Scheduler* (ej. StepLR). |
 | **Robustez Visual** | **Color Jittering Controlado:** Variación aleatoria de brillo y contraste durante la carga de *batches*. | Desvincula al modelo de las condiciones de iluminación exactas del momento de grabación. | Si se aplican valores muy altos, puede "quemar" la imagen y ocultar las líneas de la pista. Requiere *tuning* previo. |
+| **Gestión Espacial de Imagen** | **Top-Cropping Paramétrico:** Recorte geométrico y estricto del tercio superior del tensor en la capa del `Dataset`. | Elimina el ruido de fondo (paredes, luces, objetos del laboratorio). Evita el *overfitting* de contexto, forzando a las capas convolucionales a reaccionar a la textura del asfalto. | N/A. Solo asegura que el recorte no elimine información temprana de la curva. |
+| **Métrica de Optimización** | **Transición de Accuracy a F1-Score:** El optimizador y el guardado de *checkpoints* ahora priorizan el F1-Score de clases direccionales. | En bases de datos desbalanceadas con mucho movimiento recto (`FORWARD`), el *accuracy* engaña. El F1 castiga al modelo si ignora las curvas. | N/A. |
+| **Balanceo de Función de Costo** | **Eliminación de Pesos Dinámicos:** Regreso a `CrossEntropyLoss` puro (peso 1.0 uniforme). | Los pesos multiplicaban los gradientes en errores de `RIGHT`. Como el *Mirroring* ya genera un balance 50/50 artificial de giros, los pesos generaban una sobre-penalización y corrompían el optimizador. | N/A. |

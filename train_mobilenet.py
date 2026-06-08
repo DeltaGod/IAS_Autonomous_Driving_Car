@@ -21,12 +21,16 @@ class AutonomousDriveDataset(Dataset):
         self.df = df.reset_index(drop=True)
         self.is_train = is_train
         
-        # Mapeo estricto de clases
         self.class_map = {"STOP": 0, "FORWARD": 1, "BACKWARD": 2, "LEFT": 3, "RIGHT": 4}
         
-        # Parámetros calibrados empíricamente
-        self.jitter = T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.05)
-        self.normalize = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) # Standard ImageNet
+        # 1. Resize estricto a la resolución nativa de MobileNetV3 (Obligatorio)
+        self.resize = T.Resize((224, 224), antialias=True)
+        
+        # 2. Jittering Sutil (15%) - Solo lo suficiente para no memorizar la luz del laboratorio
+        self.jitter = T.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.15, hue=0.05)
+        
+        # 3. Normalización estándar de ImageNet
+        self.normalize = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
     def __len__(self):
         return len(self.df)
@@ -38,17 +42,18 @@ class AutonomousDriveDataset(Dataset):
         speedA, speedB = float(row['speedA']), float(row['speedB'])
         behavior = row['behavior']
 
+        # --- PREPROCESAMIENTO ESPACIAL GEOMÉTRICO ---
+        # SIN recortes. Aplicamos el Resize estricto a TODAS las imágenes.
+        img = self.resize(img)
+
         # --- DATA AUGMENTATION (SOLO ENTRENAMIENTO) ---
         if self.is_train:
-            # 1. Color Jittering calibrado
             img = self.jitter(img)
             
-            # 2. Mirroring Estocástico (50% de probabilidad)
+            # Mirroring Estocástico (50% de probabilidad)
             if torch.rand(1).item() < 0.5:
                 img = TF.hflip(img)
-                # Invertir física
                 speedA, speedB = speedB, speedA
-                # Invertir etiqueta
                 if behavior == "LEFT": behavior = "RIGHT"
                 elif behavior == "RIGHT": behavior = "LEFT"
 
@@ -64,25 +69,57 @@ class AutonomousDriveDataset(Dataset):
 # 2. MODELO: PYTORCH LIGHTNING MODULE
 # ==========================================
 class MobileNetV3Driver(pl.LightningModule):
-    def __init__(self, num_classes=5, lr=1e-3):
+    def __init__(self, num_classes=5, lr=1e-4): # Learning Rate más bajo por descongelar capas profundas
         super().__init__()
         self.save_hyperparameters()
         
-        # Cargar SOTA Backbone (Pre-entrenado en ImageNet)
         self.backbone = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
         
-        # FASE 1: Congelar el backbone (Feature Extractor) para evitar Catastrophic Forgetting
-        for param in self.backbone.features.parameters():
-            param.requires_grad = False
+        # FASE 3: Descongelamiento Híbrido SOTA
+        # Congelamos bloques 0 al 10 (Detectores de líneas base de ImageNet)
+        # Descongelamos bloques 11 y 12 (Semántica específica de la pista)
+        for i, child in enumerate(self.backbone.features.children()):
+            if i <= 10:
+                for param in child.parameters():
+                    param.requires_grad = False
+            else:
+                for param in child.parameters():
+                    param.requires_grad = True
+                    
+        self.backbone.classifier[2] = nn.Dropout(p=0.5, inplace=True)
             
-        # Reemplazar la cabeza clasificadora original (1000 clases) por las nuestras (5)
         in_features = self.backbone.classifier[3].in_features
         self.backbone.classifier[3] = nn.Linear(in_features, num_classes)
         
         self.loss_fn = nn.CrossEntropyLoss()
 
+    def train(self, mode=True):
+        """
+        Sobrescribimos el método train para PROTEGER las capas BatchNorm.
+        Incluso si descongelamos convoluciones, las estadísticas de BN no deben mutar.
+        """
+        super().train(mode)
+        if mode:
+            for m in self.modules():
+                if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+                    m.eval()
+                    if hasattr(m, 'weight') and m.weight is not None:
+                        m.weight.requires_grad = False
+                    if hasattr(m, 'bias') and m.bias is not None:
+                        m.bias.requires_grad = False
+
     def forward(self, x):
         return self.backbone(x)
+        
+    def _calculate_f1_class(self, preds, y, class_idx):
+        tp = ((preds == class_idx) & (y == class_idx)).sum().float()
+        fp = ((preds == class_idx) & (y != class_idx)).sum().float()
+        fn = ((preds != class_idx) & (y == class_idx)).sum().float()
+        
+        precision = tp / (tp + fp + 1e-6)
+        recall = tp / (tp + fn + 1e-6)
+        f1 = 2 * (precision * recall) / (precision + recall + 1e-6)
+        return f1
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -98,17 +135,27 @@ class MobileNetV3Driver(pl.LightningModule):
         x, y = batch
         logits = self(x)
         loss = self.loss_fn(logits, y)
-        acc = (logits.argmax(dim=1) == y).float().mean()
+        preds = logits.argmax(dim=1)
+        
+        acc = (preds == y).float().mean()
+        
+        f1_left = self._calculate_f1_class(preds, y, 3)
+        f1_right = self._calculate_f1_class(preds, y, 4)
         
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val_acc', acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val_f1_LEFT', f1_left, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val_f1_RIGHT', f1_right, on_step=False, on_epoch=True, prog_bar=True)
 
     def configure_optimizers(self):
-        # Usamos AdamW (Adam con Weight Decay correcto)
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr, weight_decay=1e-4)
-        
-        # Scheduler SOTA Clásico: Reduce el LR a la décima parte cada 5 épocas
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+        # Filtramos solo los parámetros que requieren gradiente para AdamW
+        optimizer = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, self.parameters()), 
+            lr=self.hparams.lr, 
+            weight_decay=1e-4
+        )
+        # Extendemos el Step a 7 épocas (Paciencia Optimizadora)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
         return [optimizer], [scheduler]
 
 # ==========================================
@@ -118,7 +165,6 @@ def main():
     print("Cargando CSV Global...")
     df = pd.read_csv("dataset_global.csv")
     
-    # 1. SPLIT RIGUROSO POR SESIÓN (Evitar Fuga de Datos)
     gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
     train_idx, val_idx = next(gss.split(df, groups=df['record']))
     
@@ -127,44 +173,40 @@ def main():
     
     print(f"Sesiones (Frames) -> Train: {len(train_df)} | Val: {len(val_df)}")
 
-    # 2. DATA LOADERS (Ajusta batch_size a 32 si tu RTX 3050 Ti de 4GB se queda sin VRAM)
     BATCH_SIZE = 64
     
     train_dataset = AutonomousDriveDataset(train_df, is_train=True)
-    val_dataset = AutonomousDriveDataset(val_df, is_train=False) # NUNCA aumentar validación
+    val_dataset = AutonomousDriveDataset(val_df, is_train=False) 
     
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
 
-    # 3. CONFIGURACIÓN DEL MODELO Y LOGGING
-    model = MobileNetV3Driver(num_classes=5, lr=1e-3)
+    # LR bajado a 1e-4 para proteger las convoluciones 11 y 12 descongeladas
+    model = MobileNetV3Driver(num_classes=5, lr=1e-4)
     
-    wandb_logger = WandbLogger(project="Autonomous-Driving-ENIB", name="MobileNetV3_Phase1")
+    wandb_logger = WandbLogger(project="Autonomous-Driving-ENIB", name="MobileNetV3_Phase3_Hybrid")
     
-    # Guardar el mejor modelo basado en valid_loss
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_loss',
+        monitor='val_f1_LEFT',
         dirpath='checkpoints/',
-        filename='mobilenet-sota-{epoch:02d}-{val_loss:.2f}',
+        filename='mobilenet-sota-{epoch:02d}-{val_f1_LEFT:.2f}',
         save_top_k=1,
-        mode='min'
+        mode='max'
     )
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
-    # 4. ENTRENAMIENTO (Phase 1: Head Only)
     trainer = pl.Trainer(
-        max_epochs=10, 
-        accelerator='gpu',      # Usará tu RTX 3050 Ti automáticamente
+        max_epochs=15,          # Aumentado a 15 épocas
+        accelerator='gpu',      
         devices=1,
         logger=wandb_logger,
         callbacks=[checkpoint_callback, lr_monitor],
-        precision='16-mixed'    # Ahorra muchísima VRAM (Half Precision)
+        precision='16-mixed'    
     )
 
-    print("\n🚀 INICIANDO ENTRENAMIENTO (FASE 1: FEATURE EXTRACTOR CONGELADO) 🚀")
+    print("\n🚀 INICIANDO ENTRENAMIENTO (FASE 3: UNFREEZE HÍBRIDO Y RESIZE NATIVO) 🚀")
     trainer.fit(model, train_loader, val_loader)
 
 if __name__ == "__main__":
-    # Necesario para el Multiprocessing de Windows/Linux con DataLoaders
     torch.set_float32_matmul_precision('medium')
     main()
