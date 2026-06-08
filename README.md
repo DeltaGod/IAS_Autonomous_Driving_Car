@@ -26,10 +26,11 @@ La database esta MUY poblada por curvas a la IZQUIERDA, Se propone flipear en en
 
 ## 🚀 Entrenamiento y Modelos
 
-El entrenamiento se gestiona mediante `train_mobilenet.py` con logging integrado en **Weights & Biases**. 
+El entrenamiento se gestiona mediante `train_mobilenet.py` con logging **local** (CSVLogger de Lightning + matplotlib; sin servicios externos).
 
-*   **Modelo Actual:** MobileNetV3-Small (V1.1)
-*   **Métrica Principal:** ~60% Val Accuracy.
+*   **Modelo Actual:** `MotorControlNet` (V2.0) — MobileNetV3-Small + 4 cabezas.
+*   **Tarea:** IMAGEN → control por motor: `speedA`, `speedB`, `behaviorA`, `behaviorB`.
+*   **Métrica Principal:** F1 macro por motor (3 clases) + MAE de velocidad.
 
 Para un análisis detallado de la evolución del modelo, hiperparámetros y diagnósticos de cada versión, consultá la bitácora completa:
 
@@ -51,9 +52,9 @@ Esta sección documenta las decisiones críticas tomadas durante el diseño del 
 
 | Componente | Decisión Tomada | Justificación | Riesgo / Fallback |
 | :--- | :--- | :--- | :--- |
-| **Balanceo de Clases** | **Mirroring Estocástico en *Runtime*:** Espejado de imágenes + inversión de comandos `speedA`/`speedB` y etiquetas. | Corrige el sesgo extremo del *dataset* original (giros a izquierda vs derecha) sin duplicar archivos en disco duro. | Verificar que no haya asimetrías físicas en el laboratorio que confundan a la red al ser espejadas. |
-| **Transfer Learning** | **Entrenamiento en Dos Fases:** 1. Congelar *backbone* de MobileNetV3. 2. *Unfreeze* total con bajo *Learning Rate*. | Previene el *Catastrophic Forgetting*. Evita que gradientes iniciales altos destruyan los pesos pre-entrenados en ImageNet. | Si la red no converge, ajustar el *Learning Rate Scheduler* (ej. StepLR). |
-| **Robustez Visual** | **Color Jittering Controlado:** Variación aleatoria de brillo y contraste durante la carga de *batches*. | Desvincula al modelo de las condiciones de iluminación exactas del momento de grabación. | Si se aplican valores muy altos, puede "quemar" la imagen y ocultar las líneas de la pista. Requiere *tuning* previo. |
-| **Gestión Espacial de Imagen** | **Top-Cropping Paramétrico:** Recorte geométrico y estricto del tercio superior del tensor en la capa del `Dataset`. | Elimina el ruido de fondo (paredes, luces, objetos del laboratorio). Evita el *overfitting* de contexto, forzando a las capas convolucionales a reaccionar a la textura del asfalto. | N/A. Solo asegura que el recorte no elimine información temprana de la curva. |
-| **Métrica de Optimización** | **Transición de Accuracy a F1-Score:** El optimizador y el guardado de *checkpoints* ahora priorizan el F1-Score de clases direccionales. | En bases de datos desbalanceadas con mucho movimiento recto (`FORWARD`), el *accuracy* engaña. El F1 castiga al modelo si ignora las curvas. | N/A. |
-| **Balanceo de Función de Costo** | **Eliminación de Pesos Dinámicos:** Regreso a `CrossEntropyLoss` puro (peso 1.0 uniforme). | Los pesos multiplicaban los gradientes en errores de `RIGHT`. Como el *Mirroring* ya genera un balance 50/50 artificial de giros, los pesos generaban una sobre-penalización y corrompían el optimizador. | N/A. |
+| **Salida del Modelo** | **Multi-salida por motor:** IMAGEN → `behaviorA`/`behaviorB` ∈ {STOP,FWD,BWD} (clasif.) + `speedA`/`speedB` (regresión). GPIO reconstruidos en harness determinista. | El modelo razona en intención de manejo; lo determinista del hardware (pines) queda fuera. Imposibilita estados inválidos como GPIO (1,1). | Si la regresión de velocidad no ancla (91% interpolada), pasar a niveles discretos (low/med/high). |
+| **Balanceo de Clases** | **Mirroring Estocástico en *Runtime* (espacio abstracto):** Espejado de imagen + **swap motor A↔B** de velocidad y dirección. FWD/BWD no cambian. | Corrige el sesgo izquierda/derecha sin duplicar archivos. En espacio abstracto evita la trampa de swapear bits GPIO (invertiría FWD↔BWD). | Verificar que no haya asimetrías físicas en el laboratorio al espejar. |
+| **Transfer Learning** | **Feature Extractor congelado:** `MobileNetV3-Small` con *features* congeladas; se entrena cuello compartido + 4 cabezas. | Previene *Catastrophic Forgetting* con poco dato y mucha redundancia temporal. Robusto y rápido. | Si subentrena, descongelar progresivamente los últimos bloques con LR bajo. |
+| **Robustez Visual** | **Color Jittering Sutil (±15%):** Variación leve de brillo/contraste/saturación durante la carga. | Desvincula al modelo de la iluminación exacta de grabación sin "quemar" la imagen. | Valores altos (±50%) saturan una red con *features* congeladas (lección V1.2). |
+| **Métrica de Optimización** | **F1 macro POR MOTOR (3 clases) + MAE de velocidad:** *checkpoints* por `val_dir_f1_macro`. F1 acumulado sobre toda la época, no por batch. | El *accuracy* engaña con el desbalance; promediar F1 por batch lo distorsiona (batches sin la clase rara). | N/A. |
+| **Balanceo de Función de Costo** | **`class_weights` reincorporados:** pesos inversos a la frecuencia (pooled A+B) en la CE de dirección. | Por motor la clase rara es BACKWARD (~5.5%); los pesos ayudan sin la sobre-penalización del viejo RIGHT (0.4%). | N/A. |

@@ -24,12 +24,23 @@ def run_benchmark(train_csv="dataset_train.csv", val_csv="dataset_val.csv"):
     print(f"Split por sesión -> Train: {len(df_train)} frames | Val: {len(df_val)} frames")
 
     # 0. DISTRIBUCIÓN DE CLASES POR SPLIT
-    print("\n--- DISTRIBUCIÓN DE CLASES POR SPLIT (%) ---")
+    print("\n--- DISTRIBUCIÓN BEHAVIOR GLOBAL POR SPLIT (%) ---")
     by_split = (
         df.groupby("split")["behavior"].value_counts(normalize=True).mul(100).round(1)
         .unstack(fill_value=0)
     )
     print(by_split.to_string())
+
+    # 0b. DISTRIBUCIÓN POR MOTOR (lo que realmente predice el modelo)
+    print("\n--- DISTRIBUCIÓN DIRECCIÓN POR MOTOR Y SPLIT (%) ---")
+    for split in ["train", "val"]:
+        sub = df[df["split"] == split]
+        per_motor = pd.DataFrame({
+            "motorA": sub["behaviorA"].value_counts(normalize=True) * 100,
+            "motorB": sub["behaviorB"].value_counts(normalize=True) * 100,
+        }).round(1).fillna(0)
+        print(f"[{split}]")
+        print(per_motor.to_string())
 
     # 1. VERIFICACIÓN DE INTEGRIDAD BÁSICA
     total_rows = len(df)
@@ -94,34 +105,52 @@ def run_benchmark(train_csv="dataset_train.csv", val_csv="dataset_val.csv"):
     # ==========================================
     print("\nGenerando gráficos de diagnóstico ('benchmark_report.png')...")
     sns.set_theme(style="whitegrid")
-    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(22, 11))
     fig.suptitle('Benchmark del Dataset de Conducción Autónoma', fontsize=16)
 
-    # Gráfico 1: Behavior Counts
-    sns.countplot(data=df, x='behavior', order=df['behavior'].value_counts().index, ax=axes[0, 0], hue='source')
-    axes[0, 0].set_title('Distribución de Clases por Fuente')
+    dir_order = ["STOP", "FORWARD", "BACKWARD"]
+
+    def motor_pct(col):
+        """% de cada dirección DENTRO de cada split (para que val no quede aplastado)."""
+        return (df.groupby('split')[col].value_counts(normalize=True).mul(100)
+                  .rename('pct').reset_index())
+
+    # Gráfico 1: Behavior global por fuente (real/interp)
+    sns.countplot(data=df, x='behavior', order=df['behavior'].value_counts().index,
+                  ax=axes[0, 0], hue='source')
+    axes[0, 0].set_title('Behavior GLOBAL (5 clases) por Fuente')
     axes[0, 0].tick_params(axis='x', rotation=45)
 
-    # Gráfico 2: Delta T Distribution
-    sns.histplot(data=df[df['delta_t'] < 2000], x='delta_t', bins=50, ax=axes[0, 1], color='coral')
-    axes[0, 1].set_title('Distribución de Latencia entre Frames (< 2s)')
-    axes[0, 1].set_xlabel('Delta T (ms)')
+    # Gráfico 2: Dirección Motor A (IZQ) por split
+    sns.barplot(data=motor_pct('behaviorA'), x='behaviorA', y='pct', hue='split',
+                order=dir_order, ax=axes[0, 1])
+    axes[0, 1].set_title('Dirección Motor A (IZQ) por Split')
+    axes[0, 1].set_xlabel('dirección'); axes[0, 1].set_ylabel('% dentro del split')
 
-    # Gráfico 3: Speed distributions
-    sns.kdeplot(data=df, x='speedA', label='Motor Izq (A)', fill=True, ax=axes[1, 0])
-    sns.kdeplot(data=df, x='speedB', label='Motor Der (B)', fill=True, ax=axes[1, 0])
-    axes[1, 0].set_title('Distribución Densidad de Velocidades PWM')
-    axes[1, 0].legend()
+    # Gráfico 3: Dirección Motor B (DER) por split
+    sns.barplot(data=motor_pct('behaviorB'), x='behaviorB', y='pct', hue='split',
+                order=dir_order, ax=axes[0, 2])
+    axes[0, 2].set_title('Dirección Motor B (DER) por Split')
+    axes[0, 2].set_xlabel('dirección'); axes[0, 2].set_ylabel('% dentro del split')
 
-    # Gráfico 4: Evolución de velocidades en una sesión aleatoria
-    muestra_record = df['record'].unique()[0]
-    df_sample = df[df['record'] == muestra_record].reset_index()
-    # Tomamos solo 200 frames para que se vea claro
-    df_sample = df_sample.head(200)
-    sns.lineplot(data=df_sample, x=df_sample.index, y='speedA', label='Motor A', ax=axes[1, 1])
-    sns.lineplot(data=df_sample, x=df_sample.index, y='speedB', label='Motor B', ax=axes[1, 1])
-    axes[1, 1].set_title(f'Rastro de Velocidad (Sample: {muestra_record})')
-    axes[1, 1].set_xlabel('Nº de Frame')
+    # Gráfico 4: Delta T
+    sns.histplot(data=df[df['delta_t'] < 2000], x='delta_t', bins=50, ax=axes[1, 0], color='coral')
+    axes[1, 0].set_title('Distribución de Latencia entre Frames (< 2s)')
+    axes[1, 0].set_xlabel('Delta T (ms)')
+
+    # Gráfico 5: Densidad de velocidades PWM
+    sns.kdeplot(data=df, x='speedA', label='Motor Izq (A)', fill=True, ax=axes[1, 1])
+    sns.kdeplot(data=df, x='speedB', label='Motor Der (B)', fill=True, ax=axes[1, 1])
+    axes[1, 1].set_title('Densidad de Velocidades PWM')
+    axes[1, 1].legend()
+
+    # Gráfico 6: Rastro de velocidades en la sesión con MÁS frames (evita chunks seq de 1 fila)
+    muestra_record = df['record'].value_counts().idxmax()
+    df_sample = df[df['record'] == muestra_record].sort_values('time_in_ms').reset_index().head(200)
+    sns.lineplot(data=df_sample, x=df_sample.index, y='speedA', label='Motor A', ax=axes[1, 2])
+    sns.lineplot(data=df_sample, x=df_sample.index, y='speedB', label='Motor B', ax=axes[1, 2])
+    axes[1, 2].set_title(f'Rastro de Velocidad (Sample: {muestra_record})')
+    axes[1, 2].set_xlabel('Nº de Frame')
 
     plt.tight_layout()
     plt.savefig('benchmark_report.png', dpi=300)

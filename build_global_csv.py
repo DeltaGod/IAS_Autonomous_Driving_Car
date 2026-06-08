@@ -53,11 +53,36 @@ def apply_brake_rule(sa, sb, g1, g2, g3, g4):
         return 0.0, 0.0
     return sa, sb
 
+def decode_motor_A(sa, g1, g2):
+    """Direccion del motor IZQ (A) ∈ {STOP, FORWARD, BACKWARD}. Convencion: fwd=(1,0), bwd=(0,1)."""
+    if sa <= 0:
+        return "STOP"
+    G1, G2 = int(round(g1)), int(round(g2))
+    if (G1, G2) == (1, 0):
+        return "FORWARD"
+    if (G1, G2) == (0, 1):
+        return "BACKWARD"
+    return "STOP"
+
+def decode_motor_B(sb, g3, g4):
+    """Direccion del motor DER (B) ∈ {STOP, FORWARD, BACKWARD}. Convencion: fwd=(0,1), bwd=(1,0)."""
+    if sb <= 0:
+        return "STOP"
+    G3, G4 = int(round(g3)), int(round(g4))
+    if (G3, G4) == (0, 1):
+        return "FORWARD"
+    if (G3, G4) == (1, 0):
+        return "BACKWARD"
+    return "STOP"
+
+# Direccion por motor -> signo (+1 fwd, -1 bwd, 0 stop) para componer el behavior global.
+_DIR_SIGN = {"FORWARD": 1, "BACKWARD": -1, "STOP": 0}
+
 def decode_behavior(sa, sb, g1, g2, g3, g4):
-    """Comportamiento a partir de velocidad + GPIO, SIN umbral."""
-    G1, G2, G3, G4 = (int(round(g1)), int(round(g2)), int(round(g3)), int(round(g4)))
-    l = 0 if sa <= 0 else (1 if (G1, G2) == (1, 0) else (-1 if (G1, G2) == (0, 1) else 0))
-    r = 0 if sb <= 0 else (1 if (G3, G4) == (0, 1) else (-1 if (G3, G4) == (1, 0) else 0))
+    """Comportamiento GLOBAL de 5 clases a partir de las direcciones por motor, SIN umbral.
+    Se usa SOLO para el flip LEFT<->RIGHT y para estadistica; el modelo no lo consume."""
+    l = _DIR_SIGN[decode_motor_A(sa, g1, g2)]
+    r = _DIR_SIGN[decode_motor_B(sb, g3, g4)]
     if l == 0 and r == 0:
         return "STOP"
     if l > 0 and r > 0:
@@ -166,24 +191,33 @@ def process_record(record_dir, dataset_dir):
             n_interp += 1
 
         sa, sb = apply_brake_rule(sa, sb, g1, g2, g3, g4)
+        # behaviorA/behaviorB se calculan AL FINAL, desde la velocidad+GPIO ya procesados.
         rows.append({
+            # --- columnas que CONSUME el modelo ---
             "image_path": os.path.join(dataset_dir, record, "Images", f"{ts}.png"),
-            "time_in_ms": ts,
             "speedA": round(sa, 1),
             "speedB": round(sb, 1),
+            "behaviorA": decode_motor_A(sa, g1, g2),
+            "behaviorB": decode_motor_B(sb, g3, g4),
+            # --- columnas de DEBUG (GPIO reales/interpolados + behavior global) ---
             "GPIO1": int(round(g1)),
             "GPIO2": int(round(g2)),
             "GPIO3": int(round(g3)),
             "GPIO4": int(round(g4)),
-            "behavior": decode_behavior(sa, sb, g1, g2, g3, g4),
-            "record": current_record, # Inyectamos el nombre de sesión segmentado
+            "behavior": decode_behavior(sa, sb, g1, g2, g3, g4),  # 5 clases, para el flip L<->R
+            "time_in_ms": ts,
+            "record": current_record,  # nombre de sesión segmentado
             "source": source,
         })
     return rows, n_cmd, n_interp, n_dropped_bordes, n_dropped_delay
 
 
-COLS = ["image_path", "time_in_ms", "speedA", "speedB", "GPIO1", "GPIO2", "GPIO3", "GPIO4",
-        "behavior", "record", "source"]
+COLS = [
+    # Primeras 5: lo que consume el modelo (imagen -> speeds + direccion por motor)
+    "image_path", "speedA", "speedB", "behaviorA", "behaviorB",
+    # Debug: GPIO reales/interpolados, behavior global (para flip L<->R) y trazabilidad
+    "GPIO1", "GPIO2", "GPIO3", "GPIO4", "behavior", "time_in_ms", "record", "source",
+]
 
 
 def build_split(record_dirs, dataset_dir):
@@ -209,9 +243,15 @@ def dump_split(rows, path, name, dropped_bordes, dropped_delay):
     print(f"Imágenes descartadas en bordes (inactividad): {dropped_bordes}")
     print(f"Imágenes descartadas por saltos (>1s): {dropped_delay}")
     print("=" * 60)
-    print(f"-- Distribución BEHAVIOR {name} (%) --")
     if len(out):
+        print(f"-- Distribución BEHAVIOR global {name} (%) --")
         print((out["behavior"].value_counts(normalize=True) * 100).round(1).to_string())
+        print(f"-- Distribución por motor {name} (%) --")
+        per_motor = pd.DataFrame({
+            "motorA": out["behaviorA"].value_counts(normalize=True) * 100,
+            "motorB": out["behaviorB"].value_counts(normalize=True) * 100,
+        }).round(1).fillna(0)
+        print(per_motor.to_string())
 
 
 def main():

@@ -1,70 +1,34 @@
 # 📓 Bitácora de Entrenamiento (Training Log)
 
-Este documento registra la evolución del modelo de Deep Learning para el proyecto IAS Autonomous Driving Car. Cada entrada detalla la configuración, los resultados obtenidos en Weights & Biases y las lecciones aprendidas.
+Este documento registra la evolución del modelo de Deep Learning para el proyecto IAS Autonomous Driving Car. Cada entrada detalla la configuración, los resultados y las lecciones aprendidas. El logging es **local** (CSVLogger de Lightning + matplotlib); no se usan servicios externos.
+
+> **Nota de esquema:** las versiones previas (V1.0–V1.2) entrenaban un **clasificador global de 5 clases** (FORWARD/BACKWARD/LEFT/RIGHT/STOP) con logging en Weights & Biases y métrica de *accuracy*. Ese enfoque fue **retirado**: el modelo ahora predice **control por motor** (4 salidas). Las entradas viejas se eliminaron por no corresponder al esquema vigente.
 
 
-## [V1.2] Arquitectura Restrictiva y F1-Score Target
-**Fecha:** 8 de Junio, 2026  
-**Estado:** Obsoleto (Pérdida de Información Espacial)
-
-### Estrategia y Cambios
-1. **Corrección de Costo:** Eliminación de `class_weights` dinámicos para evitar explosión de gradientes en conjunto con el *Mirroring*.
-2. **Retirada Táctica:** Congelamiento de bloques 0 al 11 (solo bloque 12 libre) para limitar la capacidad de memorización.
-3. **Regularización Espacial:** Crop del 33% superior para forzar la visión exclusiva al asfalto.
-4. **Métricas:** Cambio a optimización basada en *F1-Score* direccional.
-
-### Resultados (Época 9 / Mejor F1 en Época 5)
-* **Val F1 LEFT:** 0.398 (Máximo alcanzado en Época 5)
-* **Val F1 RIGHT:** 0.0 (Artefacto estadístico justificado: falta de representatividad pura de curvas a la derecha en el set de validación sin aumentar).
-* **Val Loss:** 1.240
-* **Train Loss:** 0.918
-* **ID de Run (W&B):** `run-20260608_121155-8sv1zi1v`
-
-### Diagnóstico Técnico
-* **Cierre de Brecha de Generalización (Éxito):** El modelo superó el *overfitting* de la V1.1. La diferencia entre Train y Val Loss se redujo masivamente de 1.36 a 0.33. El modelo es "sano" y dejó de memorizar.
-* **Pérdida de Anticipación (Fallo Arquitectónico):** El F1-Score máximo (~40%) resultó inferior al modelo base Random Forest (~59%). Se determinó que el *Cropping* del 33% superior eliminó el punto de fuga de las líneas, dejando a la red neuronal "ciega" ante la anticipación de la curva.
-* **Saturación de Ruido:** Un *Color Jittering* agresivo (±50%) sobre una red con sus capas de extracción congeladas saturó la capacidad de procesamiento de la red.
----
-
-## [V1.1] Fine-Tuning Parcial y Balanceo
-**Fecha:** 8 de Junio, 2026  
-**Estado:** Obsoleto
+## [V2.0] Reformulación Multi-Salida por Motor
+**Fecha:** 8 de Junio, 2026
+**Estado:** Vigente (arquitectura actual)
 
 ### Estrategia y Cambios
-1. **Fine-Tuning:** Descongelamiento de los bloques convolucionales 10, 11 y 12 de `MobileNetV3-Small`.
-2. **Balanceo de Clases:** Implementación de pesos dinámicos en `CrossEntropyLoss` basados en la frecuencia inversa de las muestras.
-3. **Regularización:** Incremento de Dropout a `0.5` en el clasificador.
-4. **Optimización:** Reducción del Learning Rate a `5e-4` con `StepLR`.
-
-### Resultados (Época 9)
-*   **Val Accuracy:** ~59.6% (📈 +6% respecto a V1.0)
-*   **Val Loss:** 1.522
-*   **Train Loss:** 0.168
-*   **ID de Run (W&B):** `run-20260607_205919-ufi5waks`
-
-### Diagnóstico Técnico
-*   **Éxito en Balanceo:** La caída del *accuracy* de entrenamiento comparado con la V1.0 es un indicador de que el modelo ya no está sesgado hacia la clase mayoritaria (FORWARD).
-*   **Generalización:** El descongelamiento de las capas finales permitió al modelo aprender la semántica específica de la pista de conducción.
-*   **Punto Crítico:** Existe un sobreajuste por memorización de las clases minoritarias debido a la alta capacidad del modelo y la agresividad de los pesos.
-
----
-
-## [V1.0] Baseline Inicial
-**Fecha:** 7 de Junio, 2026  
-**Estado:** Obsoleto
-
-### Estrategia
-*   Transfer Learning con `MobileNetV3-Small` pre-entrenado en ImageNet.
-*   *Feature Extractor* completamente congelado.
-*   Entrenamiento solo de la capa de salida (*Head*) por 10 épocas.
+1. **Tarea redefinida:** IMAGEN → **4 salidas**, por motor IZQ (A) y DER (B):
+   - `behaviorA`, `behaviorB` ∈ {STOP, FORWARD, BACKWARD} (clasificación, 3 clases c/u).
+   - `speedA`, `speedB` ∈ [0,100] (regresión, normalizada a [0,1] con sigmoide + L1).
+   El modelo NO predice GPIO ni el behavior global de 5 clases (se reconstruyen en el harness `predictions_to_control`).
+2. **Pérdida combinada:** `CE(dirA) + CE(dirB) + λ·(L1(spdA) + L1(spdB))`, con `λ=1.0`.
+3. **Balanceo:** `class_weights` inversos a la frecuencia (pooled A+B) **reincorporados** en la CE de dirección. El desbalance se atenúa además porque, por motor, la clase rara pasa a ser BACKWARD (~5.5%) en lugar del casi inexistente RIGHT global (0.4%).
+4. **Augmentation flip:** en **espacio abstracto** (swap motor A↔B de velocidad y dirección). NO se swapean bits GPIO (la convención asimétrica invertiría forward↔backward).
+5. **Transfer Learning:** `MobileNetV3-Small` con *feature extractor* completamente congelado; se entrena cuello compartido + 4 cabezas. Sin recortes espaciales (se descartó el top-crop, que en V1.2 cegó al modelo ante el punto de fuga).
+6. **Métrica de optimización:** **F1 macro por motor** (3 clases) calculado acumulando toda la época (no promedio por batch) + MAE de velocidad. Checkpoint por `val_dir_f1_macro`.
+7. **Split por sesión:** train = 1ª sesión (24.490 frames), val = otras 2 sesiones (686 frames).
 
 ### Resultados
-*   **Val Accuracy:** 53.85%
-*   **Train Accuracy:** 65.90%
-*   **Val Loss:** 1.364
-*   **ID de Run (W&B):** `run-20260607_202852-haah3sui`
+* **Estado:** Pendiente — primera corrida del esquema V2.0 no ejecutada aún.
+* **Val F1 macro (Motor A):** _por correr_
+* **Val F1 macro (Motor B):** _por correr_
+* **Val MAE velocidad (A / B):** _por correr_
+* **Val Loss / Train Loss:** _por correr_
 
 ### Diagnóstico Técnico
-*   **Sesgo:** El modelo predice principalmente la clase mayoritaria.
-*   **Limitación de Dominio:** Los filtros de ImageNet no son suficientes para el control lateral y detección de pista sin un mínimo de fine-tuning.
-*   **Overfitting:** El modelo dejó de aprender en la época 0 (mínimo de Val Loss alcanzado inmediatamente).
+* **Imbalance disuelto (hipótesis):** descomponer la decisión por motor debería eliminar el problema del RIGHT inaprendible (0.4%), repartiéndolo entre direcciones por motor más balanceadas.
+* **Riesgo de regresión sintética:** el 91% de las velocidades son interpoladas (rampas lineales) y casi bimodales (0 / ~60). El MAE de velocidad debe leerse con cautela; evaluar si conviene pasar a niveles discretos.
+* **Riesgo de generalización:** val proviene de sesiones distintas a train, con distribución muy diferente (más BACKWARD/STOP). Es el test honesto de generalización entre sesiones.

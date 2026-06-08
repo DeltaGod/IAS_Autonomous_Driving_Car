@@ -56,7 +56,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         target_image = sys.argv[1]
     else:
-        # Reemplaza esto con una ruta válida real que saques de tu dataset_global.csv
-        target_image = "DataSet/Record_2025-08-08_19-36-02/Images/1754674834877.png" 
+        # Reemplaza esto con una ruta válida real que saques de dataset_train.csv
+        target_image = "DataSet/Record_2025-08-08_19-36-02/Images/1754674834877.png"
         
     run_tuning_session(target_image)
