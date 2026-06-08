@@ -5,10 +5,8 @@ torch
 torchvision
 torchaudio
 
-# Framework y Tracking
+# Framework (tracking/graficado: local con matplotlib, sin APIs externas)
 lightning
-wandb
-mlflow
 
 # Data Science, Limpieza y Visualización
 pandas

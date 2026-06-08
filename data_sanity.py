@@ -4,18 +4,33 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-def run_benchmark(csv_path="dataset_global.csv"):
-    if not os.path.exists(csv_path):
-        print(f"[ERROR] No se encontró el archivo {csv_path}.")
+def run_benchmark(train_csv="dataset_train.csv", val_csv="dataset_val.csv"):
+    missing = [p for p in (train_csv, val_csv) if not os.path.exists(p)]
+    if missing:
+        print(f"[ERROR] No se encontraron los archivos: {', '.join(missing)}.")
+        print("Corré primero 'build_global_csv.py' para generarlos.")
         return
 
-    print("Cargando dataset...")
-    df = pd.read_csv(csv_path)
-    
+    print("Cargando datasets (train + val)...")
+    df_train = pd.read_csv(train_csv)
+    df_val = pd.read_csv(val_csv)
+    df_train["split"] = "train"
+    df_val["split"] = "val"
+    df = pd.concat([df_train, df_val], ignore_index=True)
+
     print("\n============================================================")
     print("📊 REPORTE DE DATA SANITY Y BENCHMARKING")
     print("============================================================")
-    
+    print(f"Split por sesión -> Train: {len(df_train)} frames | Val: {len(df_val)} frames")
+
+    # 0. DISTRIBUCIÓN DE CLASES POR SPLIT
+    print("\n--- DISTRIBUCIÓN DE CLASES POR SPLIT (%) ---")
+    by_split = (
+        df.groupby("split")["behavior"].value_counts(normalize=True).mul(100).round(1)
+        .unstack(fill_value=0)
+    )
+    print(by_split.to_string())
+
     # 1. VERIFICACIÓN DE INTEGRIDAD BÁSICA
     total_rows = len(df)
     null_counts = df.isnull().sum().sum()

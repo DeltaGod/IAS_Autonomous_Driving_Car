@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
@@ -8,9 +9,8 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from sklearn.model_selection import GroupShuffleSplit
 from PIL import Image
 
 # ==========================================
@@ -159,33 +159,73 @@ class MobileNetV3Driver(pl.LightningModule):
         return [optimizer], [scheduler]
 
 # ==========================================
-# 3. PIPELINE DE EJECUCIÓN
+# 3. GRAFICADO LOCAL DEL PROGRESO (reemplaza Weights & Biases)
+# ==========================================
+def plot_training_progress(metrics_csv, out_png="training_progress.png"):
+    """Lee el metrics.csv del CSVLogger y grafica las curvas de entrenamiento
+    localmente, sin depender de ninguna API externa."""
+    if not os.path.exists(metrics_csv):
+        print(f"[WARN] No se encontró {metrics_csv}; no se grafica el progreso.")
+        return
+
+    m = pd.read_csv(metrics_csv)
+    # El CSVLogger escribe métricas de train y val en filas distintas por época;
+    # colapsamos por época promediando (cada métrica aparece una sola vez por época).
+    m = m.groupby("epoch").mean(numeric_only=True).reset_index()
+
+    panels = [
+        ("Loss", [("train_loss", "Train"), ("val_loss", "Val")]),
+        ("Accuracy", [("train_acc", "Train"), ("val_acc", "Val")]),
+        ("F1 por clase (Val)", [("val_f1_LEFT", "LEFT"), ("val_f1_RIGHT", "RIGHT")]),
+        ("Learning Rate", [("lr-AdamW", "LR")]),
+    ]
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+    fig.suptitle("Progreso de Entrenamiento — MobileNetV3 (local)", fontsize=15)
+    for ax, (title, series) in zip(axes.ravel(), panels):
+        plotted = False
+        for col, label in series:
+            if col in m.columns and m[col].notna().any():
+                d = m[["epoch", col]].dropna()
+                ax.plot(d["epoch"], d[col], marker="o", label=label)
+                plotted = True
+        ax.set_title(title)
+        ax.set_xlabel("Época")
+        ax.grid(True, alpha=0.3)
+        if plotted:
+            ax.legend()
+        else:
+            ax.text(0.5, 0.5, "sin datos", ha="center", va="center", transform=ax.transAxes)
+
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=150)
+    print(f"\n📈 Curvas de entrenamiento guardadas en '{out_png}' (fuente: {metrics_csv})")
+
+
+# ==========================================
+# 4. PIPELINE DE EJECUCIÓN
 # ==========================================
 def main():
-    print("Cargando CSV Global...")
-    df = pd.read_csv("dataset_global.csv")
-    
-    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-    train_idx, val_idx = next(gss.split(df, groups=df['record']))
-    
-    train_df = df.iloc[train_idx]
-    val_df = df.iloc[val_idx]
-    
-    print(f"Sesiones (Frames) -> Train: {len(train_df)} | Val: {len(val_df)}")
+    print("Cargando CSVs (split por sesión: train = 1ª sesión, val = resto)...")
+    train_df = pd.read_csv("dataset_train.csv")
+    val_df = pd.read_csv("dataset_val.csv")
+
+    print(f"Frames -> Train: {len(train_df)} | Val: {len(val_df)}")
 
     BATCH_SIZE = 64
-    
+
     train_dataset = AutonomousDriveDataset(train_df, is_train=True)
-    val_dataset = AutonomousDriveDataset(val_df, is_train=False) 
-    
+    val_dataset = AutonomousDriveDataset(val_df, is_train=False)
+
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
 
     # LR bajado a 1e-4 para proteger las convoluciones 11 y 12 descongeladas
     model = MobileNetV3Driver(num_classes=5, lr=1e-4)
-    
-    wandb_logger = WandbLogger(project="Autonomous-Driving-ENIB", name="MobileNetV3_Phase3_Hybrid")
-    
+
+    # Logger LOCAL (CSV): sin Weights & Biases, sin llamadas a API externas.
+    csv_logger = CSVLogger(save_dir="logs", name="MobileNetV3_Phase3_Hybrid")
+
     checkpoint_callback = ModelCheckpoint(
         monitor='val_f1_LEFT',
         dirpath='checkpoints/',
@@ -197,15 +237,18 @@ def main():
 
     trainer = pl.Trainer(
         max_epochs=15,          # Aumentado a 15 épocas
-        accelerator='gpu',      
+        accelerator='gpu',
         devices=1,
-        logger=wandb_logger,
+        logger=csv_logger,
         callbacks=[checkpoint_callback, lr_monitor],
-        precision='16-mixed'    
+        precision='16-mixed'
     )
 
     print("\n🚀 INICIANDO ENTRENAMIENTO (FASE 3: UNFREEZE HÍBRIDO Y RESIZE NATIVO) 🚀")
     trainer.fit(model, train_loader, val_loader)
+
+    # Graficamos el progreso nosotros mismos a partir del log local.
+    plot_training_progress(os.path.join(csv_logger.log_dir, "metrics.csv"))
 
 if __name__ == "__main__":
     torch.set_float32_matmul_precision('medium')

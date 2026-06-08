@@ -182,10 +182,45 @@ def process_record(record_dir, dataset_dir):
     return rows, n_cmd, n_interp, n_dropped_bordes, n_dropped_delay
 
 
+COLS = ["image_path", "time_in_ms", "speedA", "speedB", "GPIO1", "GPIO2", "GPIO3", "GPIO4",
+        "behavior", "record", "source"]
+
+
+def build_split(record_dirs, dataset_dir):
+    """Procesa una lista de sesiones y devuelve (rows, dropped_bordes, dropped_delay)."""
+    all_rows = []
+    total_dropped_bordes = 0
+    total_dropped_delay = 0
+    for rd in record_dirs:
+        rows, n_cmd, n_interp, n_drop_bordes, n_drop_delay = process_record(rd, dataset_dir)
+        total_dropped_bordes += n_drop_bordes
+        total_dropped_delay += n_drop_delay
+        print(f"  {os.path.basename(rd):30s} -> {len(rows):6d} imgs  "
+              f"(cmd: {n_cmd}, interp: {n_interp}, bordes desc.: {n_drop_bordes}, delays desc.: {n_drop_delay})")
+        all_rows.extend(rows)
+    return all_rows, total_dropped_bordes, total_dropped_delay
+
+
+def dump_split(rows, path, name, dropped_bordes, dropped_delay):
+    out = pd.DataFrame(rows, columns=COLS)
+    out.to_csv(path, index=False)
+    print("\n" + "=" * 60)
+    print(f"CSV {name}: {len(out)} filas -> {path}")
+    print(f"Imágenes descartadas en bordes (inactividad): {dropped_bordes}")
+    print(f"Imágenes descartadas por saltos (>1s): {dropped_delay}")
+    print("=" * 60)
+    print(f"-- Distribución BEHAVIOR {name} (%) --")
+    if len(out):
+        print((out["behavior"].value_counts(normalize=True) * 100).round(1).to_string())
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Genera un CSV global imagen->comando con segmentación temporal.")
+    ap = argparse.ArgumentParser(
+        description="Genera CSVs imagen->comando con split por sesión (train/val)."
+    )
     ap.add_argument("--dataset-dir", default="DataSet", help="carpeta raiz con los Record_*")
-    ap.add_argument("--output", default="dataset_global.csv", help="archivo de salida")
+    ap.add_argument("--output-train", default="dataset_train.csv", help="CSV de entrenamiento")
+    ap.add_argument("--output-val", default="dataset_val.csv", help="CSV de validación")
     args = ap.parse_args()
 
     record_dirs = sorted(
@@ -196,31 +231,24 @@ def main():
         print(f"No se encontraron carpetas Record_* en '{args.dataset_dir}'.")
         return
 
+    # SPLIT POR SESIÓN: la PRIMERA sesión (cronológica, la grande con >20k imágenes)
+    # se usa para ENTRENAR; el resto de las sesiones se reservan para VALIDAR.
+    train_dirs = record_dirs[:1]
+    val_dirs = record_dirs[1:]
+    if not val_dirs:
+        print("[ADVERTENCIA] Solo hay una sesión: no queda nada para validación.")
+
     print(f"Sesiones encontradas: {len(record_dirs)}")
-    all_rows = []
-    total_dropped_bordes = 0
-    total_dropped_delay = 0
-    
-    for rd in record_dirs:
-        rows, n_cmd, n_interp, n_drop_bordes, n_drop_delay = process_record(rd, args.dataset_dir)
-        total_dropped_bordes += n_drop_bordes
-        total_dropped_delay += n_drop_delay
-        print(f"  {os.path.basename(rd):30s} -> {len(rows):6d} imgs  "
-              f"(cmd: {n_cmd}, interp: {n_interp}, bordes desc.: {n_drop_bordes}, delays desc.: {n_drop_delay})")
-        all_rows.extend(rows)
+    print(f"  TRAIN: {', '.join(os.path.basename(d) for d in train_dirs)}")
+    print(f"  VAL  : {', '.join(os.path.basename(d) for d in val_dirs) or '(ninguna)'}")
 
-    cols = ["image_path", "time_in_ms", "speedA", "speedB", "GPIO1", "GPIO2", "GPIO3", "GPIO4",
-            "behavior", "record", "source"]
-    out = pd.DataFrame(all_rows, columns=cols)
-    out.to_csv(args.output, index=False)
+    print("\n[TRAIN]")
+    train_rows, tr_bordes, tr_delay = build_split(train_dirs, args.dataset_dir)
+    print("\n[VAL]")
+    val_rows, va_bordes, va_delay = build_split(val_dirs, args.dataset_dir)
 
-    print("\n" + "=" * 60)
-    print(f"CSV GLOBAL: {len(out)} filas -> {args.output}")
-    print(f"Imágenes descartadas en bordes (inactividad): {total_dropped_bordes}")
-    print(f"Imágenes descartadas por saltos (>1s): {total_dropped_delay}")
-    print("=" * 60)
-    print("\n-- Distribución BEHAVIOR (%) --")
-    print((out["behavior"].value_counts(normalize=True) * 100).round(1).to_string())
+    dump_split(train_rows, args.output_train, "TRAIN", tr_bordes, tr_delay)
+    dump_split(val_rows, args.output_val, "VAL", va_bordes, va_delay)
 
 if __name__ == "__main__":
     main()
