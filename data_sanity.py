@@ -4,7 +4,11 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-def run_benchmark(train_csv="dataset_train.csv", val_csv="dataset_val.csv"):
+from config import CFG
+
+def run_benchmark(train_csv=None, val_csv=None):
+    train_csv = train_csv or CFG.train_csv
+    val_csv = val_csv or CFG.val_csv
     missing = [p for p in (train_csv, val_csv) if not os.path.exists(p)]
     if missing:
         print(f"[ERROR] No se encontraron los archivos: {', '.join(missing)}.")
