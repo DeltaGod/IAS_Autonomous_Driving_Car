@@ -281,33 +281,33 @@ def evaluate_and_plot(model, loader, device, out_png="eval_confusion.png"):
 # 5. PIPELINE DE EJECUCIÓN
 # ==========================================
 def main():
-# ==========================================
-    # 3. PIPELINE DE EJECUCIÓN
-    # ==========================================
-    print("Cargando CSV Global...")
-    df = pd.read_csv("dataset_global.csv")
+# # ==========================================
+#     # 3. PIPELINE DE EJECUCIÓN
+#     # ==========================================
+#     print("Cargando CSV Global...")
+#     df = pd.read_csv("dataset_global.csv")
     
-    # 1. SPLIT RIGUROSO POR SESIÓN (Evitar Fuga de Datos)
-    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-    train_idx, val_idx = next(gss.split(df, groups=df['record']))
+#     # 1. SPLIT RIGUROSO POR SESIÓN (Evitar Fuga de Datos)
+#     gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+#     train_idx, val_idx = next(gss.split(df, groups=df['record']))
     
-    train_df = df.iloc[train_idx]
-    val_df = df.iloc[val_idx] # Este es tu conjunto de Test/Validación
+#     train_df = df.iloc[train_idx]
+#     val_df = df.iloc[val_idx] # Este es tu conjunto de Test/Validación
     
-    # --- NUEVA VISUALIZACIÓN DE LOS CONJUNTOS ---
-    print("\n" + "="*50)
-    print("📊 REPORTE DE DIVISIÓN DE DATOS (SPLIT 80/20 POR SESIÓN)")
-    print("="*50)
-    print(f"Total de imágenes en el CSV global: {len(df)}")
-    print(f"-> Conjunto de ENTRENAMIENTO: {len(train_df)} imágenes ({len(train_df)/len(df)*100:.1f}%)")
-    print(f"-> Conjunto de TEST/VALIDACIÓN: {len(val_df)} imágenes ({len(val_df)/len(df)*100:.1f}%)")
+#     # --- NUEVA VISUALIZACIÓN DE LOS CONJUNTOS ---
+#     print("\n" + "="*50)
+#     print("📊 REPORTE DE DIVISIÓN DE DATOS (SPLIT 80/20 POR SESIÓN)")
+#     print("="*50)
+#     print(f"Total de imágenes en el CSV global: {len(df)}")
+#     print(f"-> Conjunto de ENTRENAMIENTO: {len(train_df)} imágenes ({len(train_df)/len(df)*100:.1f}%)")
+#     print(f"-> Conjunto de TEST/VALIDACIÓN: {len(val_df)} imágenes ({len(val_df)/len(df)*100:.1f}%)")
     
-    print("\nDistribución de clases en ENTRENAMIENTO:")
-    print(train_df['behavior'].value_counts().to_string())
+#     print("\nDistribución de clases en ENTRENAMIENTO:")
+#     print(train_df['behavior'].value_counts().to_string())
     
-    print("\nDistribución de clases en TEST/VALIDACIÓN:")
-    print(val_df['behavior'].value_counts().to_string())
-    print("="*50 + "\n")
+#     print("\nDistribución de clases en TEST/VALIDACIÓN:")
+#     print(val_df['behavior'].value_counts().to_string())
+#     print("="*50 + "\n")
 
     # 2. DATA LOADERS
     print("Cargando CSVs (split por sesión: train = 1ª sesión, val = resto)...")
