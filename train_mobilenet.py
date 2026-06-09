@@ -33,6 +33,8 @@ from sklearn.model_selection import GroupShuffleSplit
 
 from config import CFG, active_params_text
 
+from config import CFG, active_params_text
+
 DIR_MAP = {"STOP": 0, "FORWARD": 1, "BACKWARD": 2}
 DIR_INV = {v: k for k, v in DIR_MAP.items()}
 SPEED_SCALE = 100.0
@@ -272,48 +274,8 @@ def evaluate_and_plot(model, loader, device, out_png="eval_confusion.png"):
 # ==========================================
 # 5. PIPELINE
 # ==========================================
-<<<<<<< HEAD
-def main():
-# # ==========================================
-#     # 3. PIPELINE DE EJECUCIÓN
-#     # ==========================================
-#     print("Cargando CSV Global...")
-#     df = pd.read_csv("dataset_global.csv")
-    
-#     # 1. SPLIT RIGUROSO POR SESIÓN (Evitar Fuga de Datos)
-#     gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-#     train_idx, val_idx = next(gss.split(df, groups=df['record']))
-    
-#     train_df = df.iloc[train_idx]
-#     val_df = df.iloc[val_idx] # Este es tu conjunto de Test/Validación
-    
-#     # --- NUEVA VISUALIZACIÓN DE LOS CONJUNTOS ---
-#     print("\n" + "="*50)
-#     print("📊 REPORTE DE DIVISIÓN DE DATOS (SPLIT 80/20 POR SESIÓN)")
-#     print("="*50)
-#     print(f"Total de imágenes en el CSV global: {len(df)}")
-#     print(f"-> Conjunto de ENTRENAMIENTO: {len(train_df)} imágenes ({len(train_df)/len(df)*100:.1f}%)")
-#     print(f"-> Conjunto de TEST/VALIDACIÓN: {len(val_df)} imágenes ({len(val_df)/len(df)*100:.1f}%)")
-    
-#     print("\nDistribución de clases en ENTRENAMIENTO:")
-#     print(train_df['behavior'].value_counts().to_string())
-    
-#     print("\nDistribución de clases en TEST/VALIDACIÓN:")
-#     print(val_df['behavior'].value_counts().to_string())
-#     print("="*50 + "\n")
-
-    # 2. DATA LOADERS
-    print("Cargando CSVs (split por sesión: train = 1ª sesión, val = resto)...")
-    train_df = pd.read_csv("dataset_train.csv")
-    val_df = pd.read_csv("dataset_val.csv")
-    print(f"Frames -> Train: {len(train_df)} | Val: {len(val_df)}")
-
-    # Pesos de clase para dirección (pooled A+B, porque el flip intercambia motores).
-    pooled = pd.concat([train_df["behaviorA"], train_df["behaviorB"]]).map(DIR_MAP)
-=======
 def compute_class_weights(frames):
     pooled = pd.concat([frames["behaviorA"], frames["behaviorB"]]).map(DIR_MAP)
->>>>>>> ad5f55a97d47103f31488204aba193706e9e5642
     counts = pooled.value_counts().reindex([0, 1, 2]).fillna(0)
     w = counts.sum() / (3 * counts.replace(0, np.nan))
     return torch.tensor(w.fillna(0).values, dtype=torch.float32)
