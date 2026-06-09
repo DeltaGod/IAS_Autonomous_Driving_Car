@@ -18,6 +18,8 @@ import time
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import classification_report, confusion_matrix, mean_absolute_error
 
+from config import CFG
+
 
 def load_dataset(csv_path, img_size=(32, 32)):
     """Carga imágenes (grises, aplanadas) y los targets por motor."""
@@ -38,8 +40,9 @@ def load_dataset(csv_path, img_size=(32, 32)):
 
 
 def run_baseline():
-    X_tr, dirA_tr, dirB_tr, spdA_tr, spdB_tr = load_dataset("dataset_train.csv")
-    X_va, dirA_va, dirB_va, spdA_va, spdB_va = load_dataset("dataset_val.csv")
+    # Rutas desde el panel de control central (config.py).
+    X_tr, dirA_tr, dirB_tr, spdA_tr, spdB_tr = load_dataset(CFG.train_csv)
+    X_va, dirA_va, dirB_va, spdA_va, spdB_va = load_dataset(CFG.val_csv)
 
     print(f"\nSplit por sesión -> Train: {len(X_tr)} | Val: {len(X_va)}")
     labels = ["STOP", "FORWARD", "BACKWARD"]

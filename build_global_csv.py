@@ -45,6 +45,8 @@ from bisect import bisect_left, bisect_right
 
 import pandas as pd
 
+from config import CFG
+
 MAX_DELAY_MS = 1000  # Umbral máximo para considerar que hubo un salto/teletransporte
 
 def apply_brake_rule(sa, sb, g1, g2, g3, g4):
@@ -259,8 +261,8 @@ def main():
         description="Genera CSVs imagen->comando con split por sesión (train/val)."
     )
     ap.add_argument("--dataset-dir", default="DataSet", help="carpeta raiz con los Record_*")
-    ap.add_argument("--output-train", default="dataset_train.csv", help="CSV de entrenamiento")
-    ap.add_argument("--output-val", default="dataset_val.csv", help="CSV de validación")
+    ap.add_argument("--output-train", default=CFG.train_csv, help="CSV de entrenamiento")
+    ap.add_argument("--output-val", default=CFG.val_csv, help="CSV de validación")
     args = ap.parse_args()
 
     record_dirs = sorted(
