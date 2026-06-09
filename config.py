@@ -68,6 +68,19 @@ class Config:
     num_workers: int = 4
     seed: int = 42
 
+    # ============== MODELO SECUENCIAL (CNN + GRU/LSTM) ==============
+    # Lo usa train_gru.py. El backbone (MobileNetV3) va SIEMPRE congelado:
+    # lo que se entrena es la red recurrente + cuello + 4 cabezas.
+    # La ventana es MANY-TO-ONE: se predice la acción del ÚLTIMO frame de la
+    # secuencia (causal y deployable: en el auto sería un buffer rodante).
+    # seq_len y seq_stride son ADEMÁS el experimento de "frecuencia de muestreo"
+    # que pide el enunciado: a ~22fps, stride=3 ≈ ~1s de contexto temporal.
+    seq_len: int = 8          # nº de frames por secuencia (ventana temporal)
+    seq_stride: int = 3       # paso entre frames de la ventana (1 = consecutivos)
+    rnn_type: str = "GRU"     # "GRU" o "LSTM"
+    rnn_hidden: int = 128     # tamaño del estado oculto recurrente
+    rnn_layers: int = 1       # nº de capas recurrentes apiladas
+
 
 CFG = Config()
 
