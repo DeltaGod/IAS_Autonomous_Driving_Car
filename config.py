@@ -77,6 +77,7 @@ class Config:
     # que pide el enunciado: a ~22fps, stride=3 ≈ ~1s de contexto temporal.
     seq_len: int = 8          # nº de frames por secuencia (ventana temporal)
     seq_stride: int = 3       # paso entre frames de la ventana (1 = consecutivos)
+    seq_window_step: int = 1  # anti-redundancia: subsamplea ventanas en TRAIN (1=todas; 4=1 de cada 4)
     rnn_type: str = "GRU"     # "GRU" o "LSTM"
     rnn_hidden: int = 128     # tamaño del estado oculto recurrente
     rnn_layers: int = 1       # nº de capas recurrentes apiladas

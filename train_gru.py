@@ -26,6 +26,12 @@ de config.py (CFG). Para tunear, editá config.py — NO hardcodear acá.
 
 import os
 import random
+import warnings
+
+# El ajuste de hue (PIL) castea floats negativos a uint8; numpy>=1.24 lo avisa como
+# "invalid value encountered in cast". Es BENIGNO: el wraparound es justo lo que el hue
+# circular necesita. Lo silenciamos para no inundar el log (no cambia el resultado).
+warnings.filterwarnings("ignore", message="invalid value encountered in cast")
 
 import numpy as np
 import pandas as pd
@@ -66,11 +72,14 @@ class SequenceDriveDataset(Dataset):
 
     def _build_samples(self):
         T_, k = self.cfg.seq_len, self.cfg.seq_stride
+        # Anti-redundancia: en TRAIN subsamplea las ventanas (1 de cada wstep) para cortar
+        # el solape entre secuencias casi idénticas (sliding window a 22fps). Val sin tocar.
+        wstep = getattr(self.cfg, "seq_window_step", 1) if self.is_train else 1
         span = (T_ - 1) * k
         base = []
         for _, g in self.df.groupby("record", sort=False):
             idxs = g.sort_values("time_in_ms").index.to_numpy()
-            for pos in range(span, len(idxs)):
+            for pos in range(span, len(idxs), wstep):
                 win = idxs[pos - span: pos + 1: k]  # T_ índices, orden temporal ascendente
                 if len(win) == T_:
                     base.append(win)
@@ -165,7 +174,13 @@ class MotorControlGRU(MotorControlNet):
                  scheduler_step=7, scheduler_gamma=0.1, class_weights=None):
         # Saltamos el __init__ de MotorControlNet (arma otra cabeza) y vamos al de Lightning.
         pl.LightningModule.__init__(self)
-        self.save_hyperparameters(ignore=["class_weights"])
+        # Referenciar __class__ fuerza la creación de la celda __class__ del método: sin
+        # ella, save_hyperparameters de Lightning 2.x no reconoce este __init__ como el de
+        # una clase y NO captura ningún hparam (quedaría hparams.lr vacío -> KeyError).
+        _ = __class__  # noqa: F821
+        self.save_hyperparameters("neck_hidden", "dropout", "rnn_type", "rnn_hidden",
+                                  "rnn_layers", "lr", "lambda_speed", "weight_decay",
+                                  "scheduler_step", "scheduler_gamma")
 
         backbone = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
         feat_dim = backbone.classifier[0].in_features  # 576
