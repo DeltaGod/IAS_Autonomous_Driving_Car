@@ -1,0 +1,31 @@
+# model_06_signed — PER-FRAME, velocidad CON SIGNO (nn_signed.py)
+
+train_csv = dataset_train_signed.csv
+val_csv = dataset_val_signed.csv
+image_size = 224
+flip_prob_turns = 0.5
+flip_prob_straight = 0.5
+resample_factor = {'FORWARD': 1.0, 'LEFT': 1.0, 'RIGHT': 1.0, 'STOP': 1.0, 'BACKWARD': 1.0}
+jitter_brightness = 0.15
+jitter_contrast = 0.15
+jitter_saturation = 0.15
+jitter_hue = 0.05
+use_class_weights = True
+lambda_speed = 1.0
+backbone_frozen = True
+neck_hidden = [256]
+dropout = 0.4
+batch_size = 64
+lr = 0.001
+weight_decay = 0.0001
+max_epochs = 15
+scheduler_step = 7
+scheduler_gamma = 0.1
+num_workers = 4
+seed = 42
+seq_len = 8
+seq_stride = 3
+seq_window_step = 1
+rnn_type = GRU
+rnn_hidden = 128
+rnn_layers = 1

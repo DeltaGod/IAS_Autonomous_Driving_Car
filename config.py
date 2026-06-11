@@ -48,6 +48,9 @@ class Config:
 
     # ===================== PÉRDIDA / BALANCEO =====================
     use_class_weights: bool = True    # pesos inversos a la frecuencia en la CE de dirección
+    # Suaviza esos pesos elevándolos a esta potencia: 1.0 = inverso a freq (extremo),
+    # 0.5 = raíz cuadrada (modera la clase rara: backward ~6x -> ~2.5x), 0.0 = uniforme.
+    class_weight_power: float = 1.0
     lambda_speed: float = 1.0         # peso de la regresión de velocidad en la loss total
 
     # ===================== ARQUITECTURA DEL MODELO =====================

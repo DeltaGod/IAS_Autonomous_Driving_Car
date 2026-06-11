@@ -1,0 +1,28 @@
+===== MOTOR A (IZQ) — dirección decodificada de sign(PWM) =====
+              precision    recall  f1-score   support
+
+        STOP       0.79      0.07      0.12       335
+     FORWARD       0.34      0.97      0.51       170
+    BACKWARD       0.65      0.63      0.64       181
+
+    accuracy                           0.44       686
+   macro avg       0.59      0.56      0.42       686
+weighted avg       0.64      0.44      0.35       686
+
+MAE PWM con signo A: 17.7
+
+===== MOTOR B (DER) — dirección decodificada de sign(PWM) =====
+              precision    recall  f1-score   support
+
+        STOP       0.41      0.08      0.13       182
+     FORWARD       0.61      0.96      0.75       323
+    BACKWARD       0.70      0.58      0.64       181
+
+    accuracy                           0.62       686
+   macro avg       0.58      0.54      0.50       686
+weighted avg       0.58      0.62      0.55       686
+
+MAE PWM con signo B: 21.49
+
+Recall full-stop conjunto (ambos motores STOP): 0.025
+MAE PWM con signo PROMEDIO (titular): 19.59

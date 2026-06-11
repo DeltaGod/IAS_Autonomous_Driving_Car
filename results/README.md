@@ -7,14 +7,16 @@ se ve de un vistazo qué código produjo qué resultado.
 
 ## Cómo está organizado el código
 
-- **Entrypoints (un archivo = un modelo):** `model_01_perframe.py`, `model_02_gru_v1.py`,
-  `model_03_gru_v2.py`, `model_04_lstm.py`, `model_05_gru_v3_antiredun.py`.
+- **Entrypoints (un archivo = un modelo):** `model_00_baseline.py` … `model_08_signed_f1.py`.
   Cada uno arma una `Config` congelada (los hiperparámetros que DEFINEN ese modelo, visibles
   al abrir el archivo) y llama a `run_experiment(CFG, "model_NN_...")`.
 - **Motores compartidos (no se corren directo):**
-  - `nn_perframe.py` — Dataset + `MotorControlNet` (per-frame) + eval/plots + `run_experiment`.
-  - `nn_sequence.py` — Dataset de secuencias + `MotorControlGRU` (CNN+GRU/LSTM) + `run_experiment`.
-    Reutiliza (hereda) la loss/métricas/eval de `nn_perframe`.
+  - `nn_perframe.py` — Dataset + `MotorControlNet` (per-frame, dir 3-clases + velocidad) + eval/plots.
+  - `nn_sequence.py` — Dataset de secuencias + `MotorControlGRU` (CNN+GRU/LSTM). Hereda de `nn_perframe`.
+  - `nn_signed.py` — `SignedControlNet` (per-frame, target = PWM CON SIGNO ∈[-100,100], 2 salidas
+    continuas). Loss = L1 ponderada por dirección; métrica nativa = MAE-PWM-con-signo + full-stop recall.
+- **Generadores de datos:** `build_global_csv.py` (dir+speed → `dataset_train.csv`/`dataset_val.csv`),
+  `build_signed_csv.py` (envuelve al anterior y produce el target con signo → `dataset_*_signed.csv`).
 - `config.py` — define la dataclass `Config` (el esquema de parámetros). Los modelos la
   instancian con valores congelados; ya no hay un `CFG` global compartido entre experimentos.
 
@@ -47,6 +49,13 @@ Métrica principal = **F1 macro de dirección por motor** (3 clases). Velocidad 
 | 03 | GRU v2 (regul.) | `model_03_gru_v2.py` | 0.50 / 0.62 | 0.42 / 0.55 | 0.38 / 0.39 | 17.8 / 18.8 |
 | 04 | LSTM (= v2) | `model_04_lstm.py` | 0.51 / 0.58 | 0.46 / 0.64 | 0.32 / 0.32 | 18.4 / 18.3 |
 | 05 | GRU v3 anti-redun | `model_05_gru_v3_antiredun.py` | 0.50 / 0.60 | 0.42 / 0.70 | 0.39 / 0.38 | 17.0 / 18.1 |
+| 06 | signed (sel. MAE) † | `model_06_signed.py` | 0.43 / 0.54 | **0.08 / 0.09** | **0.76 / 0.74** | 16.4 / 21.7 |
+| 07 | LSTM anti-redun | `model_07_lstm_antiredun.py` | 0.52 / 0.56 | 0.50 / 0.55 | 0.30 / 0.30 | 17.3 / 18.7 |
+| 08 | signed (sel. F1, pesos suaves) † | `model_08_signed_f1.py` | 0.42 / 0.50 | **0.07 / 0.08** | 0.63 / 0.58 | 17.7 / 21.5 |
+
+† **Modelos signed (06, 08):** el target es PWM con signo (1 salida continua/motor), no clasificación.
+La dirección de la tabla se **decodifica** del signo (umbral 1 PWM) para comparar; la columna MAE es
+**MAE-PWM-con-signo** (no velocidad). Tienen además **full-stop recall** (model_06: 0.025). Detalle abajo.
 
 **Modelo 00 = piso de comparación.** Es un Random Forest sobre píxeles crudos (grises 32×32),
 SIN deep learning. Colapsa: en motor B no reconoce ni un STOP (F1 0.00) y casi ningún BACKWARD;
@@ -67,6 +76,27 @@ lo supera en F1 global. Observaciones:
 > 519 ventanas (la ventana etiqueta el ÚLTIMO frame y descarta los primeros de cada record),
 > con distribución de clases distinta (p.ej. BACKWARD 26% per-frame vs 13% secuencial). Las
 > columnas de arriba son comparables DENTRO de cada familia; entre familias, mirar tendencias.
+
+### Experimentos temporales y signed (modelos 06-08)
+
+- **07 (LSTM anti-redun)** completa el grid GRU/LSTM × redundancia: F1 0.52/0.56, igual que el
+  GRU equivalente (05). Reconfirma: GRU≈LSTM, ningún temporal supera al per-frame.
+- **06 (signed, target = PWM con signo)** probó unificar dirección+velocidad en una salida continua.
+  Resultado revelador: **BACKWARD sobrevivió** (recall 0.76/0.74, gracias a la L1 ponderada) pero
+  **STOP se desplomó** (recall 0.08, full-stop 0.025). Detectar STOP = que la salida caiga en ±1 de 0,
+  y la MAE no premia pegarle al cero → el modelo se "compromete con un signo". Además la **selección
+  por MAE eligió la peor época** para dirección (la época 0; la 4 tenía mejor F1 y full-stop) — ejemplo
+  de manual de por qué la métrica de selección importa.
+- **08 (signed + F1 + pesos suavizados)** atacó eso: selección por F1 macro y `class_weight_power=0.5`
+  (backward 6×→2.5×). **No funcionó: STOP siguió muerto** (recall 0.07/0.08, full-stop 0.025) y suavizar
+  el backward solo le bajó su recall (0.76→0.63) sin rescatar STOP. **Conclusión: el colapso de STOP en
+  el modelo signed es ESTRUCTURAL** (la regresión-a-cero no se detecta por umbral; ninguna ponderación
+  ni criterio de selección lo arregla). El fix real sería arquitectónico: salida signed + una cabeza
+  auxiliar "is-stop" (híbrido). Para esta tarea, la **clasificación explícita de dirección del per-frame
+  (01) sigue siendo superior**.
+
+La palanca `class_weight_power` (config.py) y `build_signed_csv.py` son los aportes de código de este
+experimento (los viejos quedaron intactos).
 
 **Veredicto:** el techo es el DATO, no la arquitectura. Detalle en
 `memory/temporal-model-results.md`.
