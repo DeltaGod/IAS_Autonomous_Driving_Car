@@ -41,14 +41,21 @@ Métrica principal = **F1 macro de dirección por motor** (3 clases). Velocidad 
 
 | # | modelo | código | F1 macro (A / B) | STOP recall (A / B) | BACKWARD recall (A / B) | MAE (A / B) |
 |---|---|---|---|---|---|---|
+| 00 | baseline RF (no-deep) | `model_00_baseline.py` | 0.40 / 0.23 | 0.51 / 0.00 | 0.10 / 0.03 | 19.8 / 23.2 |
 | 01 | **per-frame** ⭐ | `model_01_perframe.py` | **0.62 / 0.63** | 0.44 / 0.46 | 0.73 / 0.73 | 19.5 / 21.3 |
 | 02 | GRU v1 (sin regul.) | `model_02_gru_v1.py` | 0.45 / 0.57 | 0.26 / 0.29 | 0.38 / 0.39 | 22.3 / 22.9 |
 | 03 | GRU v2 (regul.) | `model_03_gru_v2.py` | 0.50 / 0.62 | 0.42 / 0.55 | 0.38 / 0.39 | 17.8 / 18.8 |
 | 04 | LSTM (= v2) | `model_04_lstm.py` | 0.51 / 0.58 | 0.46 / 0.64 | 0.32 / 0.32 | 18.4 / 18.3 |
 | 05 | GRU v3 anti-redun | `model_05_gru_v3_antiredun.py` | 0.50 / 0.60 | 0.42 / 0.70 | 0.39 / 0.38 | 17.0 / 18.1 |
 
-⭐ **El per-frame (modelo 01) es el mejor y el baseline a superar.** Ningún temporal lo supera
-en F1 global. Observaciones:
+**Modelo 00 = piso de comparación.** Es un Random Forest sobre píxeles crudos (grises 32×32),
+SIN deep learning. Colapsa: en motor B no reconoce ni un STOP (F1 0.00) y casi ningún BACKWARD;
+predice casi todo FORWARD. El salto de 0.40/0.23 (RF) a **0.62/0.63** (per-frame) es la prueba
+de que la CNN aporta valor real, no es complejidad gratis. El baseline NO tiene `metrics.csv`
+(no entrena por épocas) ni `model.ckpt` (es sklearn, no Lightning).
+
+⭐ **El per-frame (modelo 01) es el mejor de los deep y el baseline a superar.** Ningún temporal
+lo supera en F1 global. Observaciones:
 
 - **STOP↔FORWARD es el error dominante** en todos (STOP recall ~0.4-0.46 en el per-frame). Es
   el borde velocidad=0, físicamente ambiguo desde un frame.
