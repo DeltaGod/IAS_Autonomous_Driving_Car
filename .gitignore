@@ -8,6 +8,11 @@ results/**/model.ckpt
 results/**/checkpoints/
 results/**/logs/
 
+# Salidas de entrenamiento en la raíz (pesos/logs/tracking): NO se versionan
+/checkpoints/
+/logs/
+/wandb/
+
 # Archivos de contexto de Claude
 /.claude/
 CLAUDE.md
