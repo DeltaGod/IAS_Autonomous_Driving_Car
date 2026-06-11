@@ -1,5 +1,0 @@
-Modelos a utilizar:
-
-- ReLU
-- Batch Normalization
-- 

@@ -1,0 +1,29 @@
+Evaluando mejor checkpoint: /home/user/integrador/checkpoints/motorgru-epoch=05-val_dir_f1_macro=0.550.ckpt
+
+===== MOTOR A (IZQ) =====
+              precision    recall  f1-score   support
+
+        STOP       0.62      0.42      0.50       284
+     FORWARD       0.37      0.64      0.47       166
+    BACKWARD       0.77      0.39      0.52        69
+
+    accuracy                           0.49       519
+   macro avg       0.59      0.49      0.50       519
+weighted avg       0.56      0.49      0.49       519
+
+MAE velocidad A: 16.99
+
+===== MOTOR B (DER) =====
+              precision    recall  f1-score   support
+
+        STOP       0.50      0.70      0.59       150
+     FORWARD       0.76      0.70      0.73       300
+    BACKWARD       0.74      0.38      0.50        69
+
+    accuracy                           0.66       519
+   macro avg       0.67      0.59      0.60       519
+weighted avg       0.68      0.66      0.66       519
+
+MAE velocidad B: 18.13
+
+📊 Matrices de confusión guardadas en 'eval_confusion_gru.png'

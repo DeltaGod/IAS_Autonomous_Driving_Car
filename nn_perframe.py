@@ -1,16 +1,16 @@
 """
-train_mobilenet.py
-==================
-Modelo: IMAGEN -> control por motor (4 salidas):
+nn_perframe.py — MOTOR de entrenamiento PER-FRAME (no es un entrypoint).
+========================================================================
+Modelo: IMAGEN (1 frame) -> control por motor (4 salidas):
   - behaviorA, behaviorB ∈ {STOP, FORWARD, BACKWARD}  (clasificación, 3 clases)
   - speedA, speedB ∈ [0,100]                           (regresión, normalizada a [0,1])
 
-TODOS los parámetros (augmentation, arquitectura, optimización) se leen de `config.py`
-(objeto CFG). Para tunear, editá config.py — NO hardcodear acá.
+Este archivo NO se corre directo: expone las piezas (Dataset, red, eval, plots) y
+`run_experiment(cfg, tag)`. Cada modelo concreto vive en su propio `model_NN_*.py`,
+que arma una `Config` CONGELADA y llama acá. Así "se ve el modelo en cada código"
+sin duplicar el train-loop. Ver convención en `results/README.md`.
 
-El modelo NO predice GPIO ni el behavior global de 5 clases; se reconstruyen en el
-harness determinista (`predictions_to_control`). El flip de augmentation es en ESPACIO
-ABSTRACTO (swap motor A<->B): FORWARD/BACKWARD no cambian, LEFT<->RIGHT se intercambian.
+  model_01_perframe.py  ->  run_experiment(CFG, "model_01_perframe")
 """
 
 import os
@@ -29,22 +29,20 @@ from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from sklearn.metrics import f1_score, confusion_matrix, classification_report
 from PIL import Image
-from sklearn.model_selection import GroupShuffleSplit
 
-from config import CFG, active_params_text
-
-from config import CFG, active_params_text
+from config import active_params_text
 
 DIR_MAP = {"STOP": 0, "FORWARD": 1, "BACKWARD": 2}
 DIR_INV = {v: k for k, v in DIR_MAP.items()}
 SPEED_SCALE = 100.0
 TURNS = {"LEFT", "RIGHT"}
 
+
 # ==========================================
-# 1. DATASET (resampling + flip abstracto, todo desde CFG)
+# 1. DATASET (resampling + flip abstracto, todo desde cfg)
 # ==========================================
 class AutonomousDriveDataset(Dataset):
-    def __init__(self, df, is_train=True, cfg=CFG):
+    def __init__(self, df, is_train=True, cfg=None):
         self.df = df.reset_index(drop=True)
         self.is_train = is_train
         self.cfg = cfg
@@ -102,8 +100,9 @@ class AutonomousDriveDataset(Dataset):
             "spdB": torch.tensor(speedB / SPEED_SCALE, dtype=torch.float32),
         }
 
+
 # ==========================================
-# 2. MODELO MULTI-CABEZA (arquitectura desde CFG)
+# 2. MODELO MULTI-CABEZA (arquitectura desde cfg)
 # ==========================================
 class MotorControlNet(pl.LightningModule):
     def __init__(self, neck_hidden=(256,), dropout=0.4, backbone_frozen=True,
@@ -198,6 +197,7 @@ class MotorControlNet(pl.LightningModule):
                                                 gamma=self.hparams.scheduler_gamma)
         return [opt], [sched]
 
+
 # ==========================================
 # 3. HARNESS DE INFERENCIA (decoder a pines)
 # ==========================================
@@ -214,10 +214,11 @@ def predictions_to_control(dirA, dirB, speedA, speedB, speed_eps=1.0):
             "speedB": 0.0 if dirB == "STOP" else round(speedB, 1),
             "GPIO1": g1, "GPIO2": g2, "GPIO3": g3, "GPIO4": g4}
 
+
 # ==========================================
-# 4. GRAFICADO LOCAL
+# 4. GRAFICADO + EVALUACIÓN LOCAL
 # ==========================================
-def plot_training_progress(metrics_csv, out_png="training_progress.png"):
+def plot_training_progress(metrics_csv, out_png="training_progress.png", cfg=None):
     if not os.path.exists(metrics_csv):
         print(f"[WARN] No se encontró {metrics_csv}; no se grafica el progreso.")
         return
@@ -229,7 +230,7 @@ def plot_training_progress(metrics_csv, out_png="training_progress.png"):
         ("Learning Rate", [("lr-AdamW", "LR")]),
     ]
     fig, axes = plt.subplots(2, 2, figsize=(14, 9))
-    fig.suptitle("Progreso de Entrenamiento — MotorControlNet (local)", fontsize=15)
+    fig.suptitle("Progreso de Entrenamiento (local)", fontsize=15)
     for ax, (title, series) in zip(axes.ravel(), panels):
         plotted = False
         for col, label in series:
@@ -238,13 +239,15 @@ def plot_training_progress(metrics_csv, out_png="training_progress.png"):
                 ax.plot(d["epoch"], d[col], marker="o", label=label); plotted = True
         ax.set_title(title); ax.set_xlabel("Época"); ax.grid(True, alpha=0.3)
         ax.legend() if plotted else ax.text(0.5, 0.5, "sin datos", ha="center", va="center", transform=ax.transAxes)
-    fig.text(0.5, 0.005, "Parámetros: " + active_params_text().replace("\n", "  |  "),
+    fig.text(0.5, 0.005, "Parámetros: " + active_params_text(cfg).replace("\n", "  |  "),
              ha="center", fontsize=8, family="monospace")
-    plt.tight_layout(rect=[0, 0.03, 1, 1]); plt.savefig(out_png, dpi=150)
+    plt.tight_layout(rect=[0, 0.03, 1, 1]); plt.savefig(out_png, dpi=150); plt.close(fig)
     print(f"\n📈 Curvas guardadas en '{out_png}'")
 
+
 @torch.no_grad()
-def evaluate_and_plot(model, loader, device, out_png="eval_confusion.png"):
+def evaluate_and_plot(model, loader, device, out_png="eval_confusion.png",
+                      report_path=None, cfg=None):
     model.eval().to(device)
     pA, tA, pB, tB, eA, eB = [], [], [], [], [], []
     for x, tgt in loader:
@@ -255,24 +258,36 @@ def evaluate_and_plot(model, loader, device, out_png="eval_confusion.png"):
     pA, tA = torch.cat(pA).numpy(), torch.cat(tA).numpy()
     pB, tB = torch.cat(pB).numpy(), torch.cat(tB).numpy()
     names = [DIR_INV[i] for i in range(3)]
-    print("\n===== MOTOR A (IZQ) =====")
-    print(classification_report(tA, pA, labels=[0, 1, 2], target_names=names, zero_division=0))
-    print("MAE velocidad A:", round(float(torch.cat(eA).mean()) * SPEED_SCALE, 2))
-    print("\n===== MOTOR B (DER) =====")
-    print(classification_report(tB, pB, labels=[0, 1, 2], target_names=names, zero_division=0))
-    print("MAE velocidad B:", round(float(torch.cat(eB).mean()) * SPEED_SCALE, 2))
+    maeA = round(float(torch.cat(eA).mean()) * SPEED_SCALE, 2)
+    maeB = round(float(torch.cat(eB).mean()) * SPEED_SCALE, 2)
+
+    lines = []
+    lines.append("===== MOTOR A (IZQ) =====")
+    lines.append(classification_report(tA, pA, labels=[0, 1, 2], target_names=names, zero_division=0))
+    lines.append(f"MAE velocidad A: {maeA}")
+    lines.append("\n===== MOTOR B (DER) =====")
+    lines.append(classification_report(tB, pB, labels=[0, 1, 2], target_names=names, zero_division=0))
+    lines.append(f"MAE velocidad B: {maeB}")
+    report = "\n".join(lines)
+    print("\n" + report)
+    if report_path:
+        with open(report_path, "w") as f:
+            f.write(report + "\n")
+        print(f"📝 Reporte guardado en '{report_path}'")
+
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     for ax, (p, t, title) in zip(axes, [(pA, tA, "Motor A (IZQ)"), (pB, tB, "Motor B (DER)")]):
         sns.heatmap(confusion_matrix(t, p, labels=[0, 1, 2]), annot=True, fmt='d', cmap='Blues',
                     xticklabels=names, yticklabels=names, ax=ax)
         ax.set_title(f"Confusión — {title}"); ax.set_xlabel("Predicho"); ax.set_ylabel("Real")
-    fig.text(0.5, 0.005, "Parámetros: " + active_params_text().replace("\n", "  |  "),
+    fig.text(0.5, 0.005, "Parámetros: " + active_params_text(cfg).replace("\n", "  |  "),
              ha="center", fontsize=8, family="monospace")
-    plt.tight_layout(rect=[0, 0.04, 1, 1]); plt.savefig(out_png, dpi=150)
-    print(f"\n📊 Matrices de confusión guardadas en '{out_png}'")
+    plt.tight_layout(rect=[0, 0.04, 1, 1]); plt.savefig(out_png, dpi=150); plt.close(fig)
+    print(f"📊 Matrices de confusión guardadas en '{out_png}'")
+
 
 # ==========================================
-# 5. PIPELINE
+# 5. UTILIDADES DE EXPERIMENTO
 # ==========================================
 def compute_class_weights(frames):
     pooled = pd.concat([frames["behaviorA"], frames["behaviorB"]]).map(DIR_MAP)
@@ -280,51 +295,78 @@ def compute_class_weights(frames):
     w = counts.sum() / (3 * counts.replace(0, np.nan))
     return torch.tensor(w.fillna(0).values, dtype=torch.float32)
 
-def main():
-    print("Cargando CSVs (rutas desde config.py)...")
-    train_df = pd.read_csv(CFG.train_csv)
-    val_df = pd.read_csv(CFG.val_csv)
 
-    train_ds = AutonomousDriveDataset(train_df, is_train=True, cfg=CFG)
-    val_ds = AutonomousDriveDataset(val_df, is_train=False, cfg=CFG)
+def save_config_snapshot(cfg, path, extra=""):
+    """Vuelca los hiperparámetros CONGELADOS de este experimento a un .txt legible."""
+    from dataclasses import asdict
+    with open(path, "w") as f:
+        if extra:
+            f.write(extra.rstrip() + "\n\n")
+        for k, v in asdict(cfg).items():
+            f.write(f"{k} = {v}\n")
+
+
+def make_trainer(cfg, out, ckpt_prefix):
+    """Trainer Lightning que detecta GPU/CPU solo (corre en la Jetson o en la laptop)."""
+    use_gpu = torch.cuda.is_available()
+    csv_logger = CSVLogger(save_dir=os.path.join(out, "logs"), name="")
+    checkpoint_callback = ModelCheckpoint(
+        monitor='val_dir_f1_macro', mode='max', save_top_k=1,
+        dirpath=os.path.join(out, "checkpoints"),
+        filename=ckpt_prefix + '-{epoch:02d}-{val_dir_f1_macro:.3f}')
+    lr_monitor = LearningRateMonitor(logging_interval='epoch')
+    trainer = pl.Trainer(
+        max_epochs=cfg.max_epochs, accelerator='auto', devices=1, logger=csv_logger,
+        callbacks=[checkpoint_callback, lr_monitor],
+        precision='16-mixed' if use_gpu else '32-true')
+    return trainer, csv_logger, checkpoint_callback
+
+
+def run_experiment(cfg, tag, results_dir="results"):
+    """Entrena el modelo PER-FRAME con la `cfg` congelada y deja TODO en results/<tag>/."""
+    torch.set_float32_matmul_precision('medium')
+    out = os.path.join(results_dir, tag)
+    os.makedirs(out, exist_ok=True)
+    save_config_snapshot(cfg, os.path.join(out, "config_used.txt"),
+                         extra=f"# {tag} — modelo PER-FRAME (nn_perframe.py)")
+
+    print(f"=== {tag} | PER-FRAME === Cargando CSVs...")
+    train_df = pd.read_csv(cfg.train_csv)
+    val_df = pd.read_csv(cfg.val_csv)
+
+    train_ds = AutonomousDriveDataset(train_df, is_train=True, cfg=cfg)
+    val_ds = AutonomousDriveDataset(val_df, is_train=False, cfg=cfg)
     print(f"Frames -> Train: {len(train_df)} (efectivos tras resample: {len(train_ds)}) | Val: {len(val_df)}")
-    print("Parámetros activos:\n" + active_params_text())
+    print("Parámetros activos:\n" + active_params_text(cfg))
 
-    class_weights = compute_class_weights(train_ds.resampled_frames()) if CFG.use_class_weights else None
+    class_weights = compute_class_weights(train_ds.resampled_frames()) if cfg.use_class_weights else None
     if class_weights is not None:
         print(f"Pesos de clase {[DIR_INV[i] for i in range(3)]}: {class_weights.tolist()}")
 
-    train_loader = DataLoader(train_ds, batch_size=CFG.batch_size, shuffle=True,
-                              num_workers=CFG.num_workers, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=CFG.batch_size, shuffle=False,
-                            num_workers=CFG.num_workers, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,
+                              num_workers=cfg.num_workers, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False,
+                            num_workers=cfg.num_workers, pin_memory=True)
 
     model = MotorControlNet(
-        neck_hidden=tuple(CFG.neck_hidden), dropout=CFG.dropout, backbone_frozen=CFG.backbone_frozen,
-        lr=CFG.lr, lambda_speed=CFG.lambda_speed, weight_decay=CFG.weight_decay,
-        scheduler_step=CFG.scheduler_step, scheduler_gamma=CFG.scheduler_gamma,
+        neck_hidden=tuple(cfg.neck_hidden), dropout=cfg.dropout, backbone_frozen=cfg.backbone_frozen,
+        lr=cfg.lr, lambda_speed=cfg.lambda_speed, weight_decay=cfg.weight_decay,
+        scheduler_step=cfg.scheduler_step, scheduler_gamma=cfg.scheduler_gamma,
         class_weights=class_weights,
     )
 
-    csv_logger = CSVLogger(save_dir="logs", name="MotorControlNet")
-    checkpoint_callback = ModelCheckpoint(monitor='val_dir_f1_macro', mode='max', save_top_k=1,
-                                          dirpath='checkpoints/',
-                                          filename='motorctrl-{epoch:02d}-{val_dir_f1_macro:.3f}')
-    lr_monitor = LearningRateMonitor(logging_interval='epoch')
-    trainer = pl.Trainer(max_epochs=CFG.max_epochs, accelerator='gpu', devices=1, logger=csv_logger,
-                         callbacks=[checkpoint_callback, lr_monitor], precision='16-mixed')
-
-    print("\n🚀 ENTRENANDO MotorControlNet 🚀")
+    trainer, csv_logger, checkpoint_callback = make_trainer(cfg, out, ckpt_prefix="motorctrl")
+    print(f"\n🚀 ENTRENANDO {tag} (MotorControlNet) 🚀")
     trainer.fit(model, train_loader, val_loader)
 
-    plot_training_progress(os.path.join(csv_logger.log_dir, "metrics.csv"))
+    plot_training_progress(os.path.join(csv_logger.log_dir, "metrics.csv"),
+                           out_png=os.path.join(out, "training_progress.png"), cfg=cfg)
     best = checkpoint_callback.best_model_path
     if best and os.path.exists(best):
         print(f"\nEvaluando mejor checkpoint: {best}")
         model = MotorControlNet.load_from_checkpoint(best, class_weights=class_weights)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    evaluate_and_plot(model, val_loader, device)
-
-if __name__ == "__main__":
-    torch.set_float32_matmul_precision('medium')
-    main()
+    evaluate_and_plot(model, val_loader, device,
+                      out_png=os.path.join(out, "eval_confusion.png"),
+                      report_path=os.path.join(out, "report.txt"), cfg=cfg)
+    print(f"\n✅ {tag} listo. Resultados en {out}/")

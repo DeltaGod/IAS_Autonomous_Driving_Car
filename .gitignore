@@ -3,7 +3,16 @@
 /.venv/
 /.env
 
+# Resultados: versionamos métricas/curvas/reportes, NO los pesos ni los logs de Lightning
+results/**/model.ckpt
+results/**/checkpoints/
+results/**/logs/
+
 # Archivos de contexto de Claude
 /.claude/
 CLAUDE.md
 claude.md
+
+# Python cache
+__pycache__/
+*.pyc

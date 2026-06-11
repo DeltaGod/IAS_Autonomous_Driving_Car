@@ -1,0 +1,25 @@
+===== MOTOR A (IZQ) =====
+              precision    recall  f1-score   support
+
+        STOP       0.75      0.44      0.56       335
+     FORWARD       0.43      0.79      0.56       170
+    BACKWARD       0.74      0.73      0.74       181
+
+    accuracy                           0.60       686
+   macro avg       0.64      0.66      0.62       686
+weighted avg       0.67      0.60      0.60       686
+
+MAE velocidad A: 19.54
+
+===== MOTOR B (DER) =====
+              precision    recall  f1-score   support
+
+        STOP       0.43      0.46      0.44       182
+     FORWARD       0.73      0.71      0.72       323
+    BACKWARD       0.75      0.73      0.74       181
+
+    accuracy                           0.65       686
+   macro avg       0.63      0.63      0.63       686
+weighted avg       0.65      0.65      0.65       686
+
+MAE velocidad B: 21.34
