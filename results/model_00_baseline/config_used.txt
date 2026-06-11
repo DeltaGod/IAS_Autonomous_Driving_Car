@@ -1,0 +1,8 @@
+# model_00_baseline — BASELINE no-deep (model_00_baseline.py)
+
+modelo = RandomForest (clasif. dirección + regresión velocidad, por motor)
+img_size = (32, 32) (grises, aplanadas)
+n_estimators = 100
+max_depth = 15
+class_weight = balanced (dirección)
+random_state = 42

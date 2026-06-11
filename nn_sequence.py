@@ -1,31 +1,31 @@
 """
-train_gru.py
-============
-Modelo SECUENCIAL: SECUENCIA de imágenes -> control por motor (mismas 4 salidas
-que train_mobilenet.py):
-  - behaviorA, behaviorB ∈ {STOP, FORWARD, BACKWARD}  (clasificación, 3 clases)
-  - speedA, speedB ∈ [0,100]                           (regresión, normalizada a [0,1])
+nn_sequence.py — MOTOR de entrenamiento SECUENCIAL CNN + GRU/LSTM (no es un entrypoint).
+=========================================================================================
+Modelo: SECUENCIA de imágenes -> control por motor (mismas 4 salidas que nn_perframe).
 
-POR QUÉ una recurrente: el error dominante del modelo por-frame fue STOP vs FORWARD,
-porque la VELOCIDAD no está en un único frame (un auto quieto y uno avanzando despacio
-en el mismo punto son idénticos). Una secuencia sí muestra si la escena avanza -> la
-GRU resuelve esa ambigüedad temporal.
+POR QUÉ una recurrente: el error dominante del per-frame es STOP vs FORWARD, porque la
+VELOCIDAD no está en un único frame (un auto quieto y uno avanzando despacio en el mismo
+punto son idénticos). Una secuencia muestra si la escena avanza -> la GRU/LSTM resuelve
+esa ambigüedad temporal.
 
 ARQUITECTURA: MobileNetV3-small CONGELADO como extractor por-frame (TimeDistributed)
--> GRU (o LSTM) sobre los T vectores -> cuello compartido -> 4 cabezas. Se entrena
-SOLO la recurrente + cuello + cabezas. Se reutiliza toda la lógica de loss/métricas
-de MotorControlNet (se hereda) para que la comparación con el modelo por-frame sea justa.
+-> GRU/LSTM sobre los T vectores -> cuello compartido -> 4 cabezas. Se reutiliza toda la
+lógica de loss/métricas/eval/plots de `nn_perframe` (herencia) para que la comparación
+con el modelo por-frame sea justa.
 
-SECUENCIAS: se arman DENTRO de cada `record` (ya segmentado en _seqN por los cortes
-de sesión >1s), ordenadas por time_in_ms. Ventana MANY-TO-ONE: se predice la acción
-del ÚLTIMO frame. NO se cruzan fronteras de record. NO hace falta tocar los CSV.
-
-Todos los parámetros (seq_len, seq_stride, rnn_*, arquitectura, optimización) salen
-de config.py (CFG). Para tunear, editá config.py — NO hardcodear acá.
+Este archivo NO se corre directo: expone `run_experiment(cfg, tag)`. Cada variante RNN
+vive en su `model_NN_*.py` con su `Config` congelada (ver `results/README.md`):
+  model_02_gru_v1.py  model_03_gru_v2.py  model_04_lstm.py  model_05_gru_v3_antiredun.py
 """
 
 import os
 import random
+import warnings
+
+# El ajuste de hue (PIL) castea floats negativos a uint8; numpy>=1.24 lo avisa como
+# "invalid value encountered in cast". Es BENIGNO: el wraparound es justo lo que el hue
+# circular necesita. Lo silenciamos para no inundar el log (no cambia el resultado).
+warnings.filterwarnings("ignore", message="invalid value encountered in cast")
 
 import numpy as np
 import pandas as pd
@@ -36,23 +36,22 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import CSVLogger
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from PIL import Image
 
-from config import CFG, active_params_text
-# Reutilizamos del modelo por-frame: mapeos, loss/métricas (herencia), eval y plots.
-from train_mobilenet import (
+from config import active_params_text
+# Reutilizamos del modelo por-frame: mapeos, loss/métricas (herencia), eval, plots, utils.
+from nn_perframe import (
     MotorControlNet, DIR_MAP, DIR_INV, SPEED_SCALE, TURNS,
     compute_class_weights, evaluate_and_plot, plot_training_progress,
+    save_config_snapshot, make_trainer,
 )
 
 
 # ==========================================
-# 1. DATASET DE SECUENCIAS (ventana many-to-one, todo desde CFG)
+# 1. DATASET DE SECUENCIAS (ventana many-to-one, todo desde cfg)
 # ==========================================
 class SequenceDriveDataset(Dataset):
-    def __init__(self, df, is_train=True, cfg=CFG):
+    def __init__(self, df, is_train=True, cfg=None):
         self.df = df.reset_index(drop=True)
         self.is_train = is_train
         self.cfg = cfg
@@ -66,11 +65,14 @@ class SequenceDriveDataset(Dataset):
 
     def _build_samples(self):
         T_, k = self.cfg.seq_len, self.cfg.seq_stride
+        # Anti-redundancia: en TRAIN subsamplea las ventanas (1 de cada wstep) para cortar
+        # el solape entre secuencias casi idénticas (sliding window a 22fps). Val sin tocar.
+        wstep = getattr(self.cfg, "seq_window_step", 1) if self.is_train else 1
         span = (T_ - 1) * k
         base = []
         for _, g in self.df.groupby("record", sort=False):
             idxs = g.sort_values("time_in_ms").index.to_numpy()
-            for pos in range(span, len(idxs)):
+            for pos in range(span, len(idxs), wstep):
                 win = idxs[pos - span: pos + 1: k]  # T_ índices, orden temporal ascendente
                 if len(win) == T_:
                     base.append(win)
@@ -153,7 +155,7 @@ class SequenceDriveDataset(Dataset):
 
 
 # ==========================================
-# 2. MODELO CNN + GRU (hereda loss/métricas de MotorControlNet)
+# 2. MODELO CNN + GRU/LSTM (hereda loss/métricas de MotorControlNet)
 # ==========================================
 class MotorControlGRU(MotorControlNet):
     """Backbone congelado por-frame -> GRU/LSTM -> cuello -> 4 cabezas.
@@ -165,7 +167,13 @@ class MotorControlGRU(MotorControlNet):
                  scheduler_step=7, scheduler_gamma=0.1, class_weights=None):
         # Saltamos el __init__ de MotorControlNet (arma otra cabeza) y vamos al de Lightning.
         pl.LightningModule.__init__(self)
-        self.save_hyperparameters(ignore=["class_weights"])
+        # Referenciar __class__ fuerza la creación de la celda __class__ del método: sin
+        # ella, save_hyperparameters de Lightning 2.x no reconoce este __init__ como el de
+        # una clase y NO captura ningún hparam (quedaría hparams.lr vacío -> KeyError).
+        _ = __class__  # noqa: F821
+        self.save_hyperparameters("neck_hidden", "dropout", "rnn_type", "rnn_hidden",
+                                  "rnn_layers", "lr", "lambda_speed", "weight_decay",
+                                  "scheduler_step", "scheduler_gamma")
 
         backbone = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
         feat_dim = backbone.classifier[0].in_features  # 576
@@ -215,58 +223,56 @@ class MotorControlGRU(MotorControlNet):
 # ==========================================
 # 3. PIPELINE
 # ==========================================
-def main():
-    print("Cargando CSVs (rutas desde config.py)...")
-    train_df = pd.read_csv(CFG.train_csv)
-    val_df = pd.read_csv(CFG.val_csv)
+def run_experiment(cfg, tag, results_dir="results"):
+    """Entrena el modelo SECUENCIAL con la `cfg` congelada y deja TODO en results/<tag>/."""
+    torch.set_float32_matmul_precision('medium')
+    out = os.path.join(results_dir, tag)
+    os.makedirs(out, exist_ok=True)
+    save_config_snapshot(cfg, os.path.join(out, "config_used.txt"),
+                         extra=f"# {tag} — modelo SECUENCIAL {cfg.rnn_type} (nn_sequence.py)")
 
-    train_ds = SequenceDriveDataset(train_df, is_train=True, cfg=CFG)
-    val_ds = SequenceDriveDataset(val_df, is_train=False, cfg=CFG)
-    print(f"Secuencias (T={CFG.seq_len}, stride={CFG.seq_stride}) -> "
+    print(f"=== {tag} | SECUENCIAL {cfg.rnn_type} === Cargando CSVs...")
+    train_df = pd.read_csv(cfg.train_csv)
+    val_df = pd.read_csv(cfg.val_csv)
+
+    train_ds = SequenceDriveDataset(train_df, is_train=True, cfg=cfg)
+    val_ds = SequenceDriveDataset(val_df, is_train=False, cfg=cfg)
+    print(f"Secuencias (T={cfg.seq_len}, stride={cfg.seq_stride}, wstep={cfg.seq_window_step}) -> "
           f"Train: {len(train_ds)} | Val: {len(val_ds)}")
     if len(val_ds) < 50:
         print(f"[ADVERTENCIA] Solo {len(val_ds)} secuencias de validación: "
               f"la métrica va a ser RUIDOSA (val es corto y T/stride lo reducen más).")
-    print("Parámetros activos:\n" + active_params_text())
+    print("Parámetros activos:\n" + active_params_text(cfg))
 
-    class_weights = compute_class_weights(train_ds.label_frames()) if CFG.use_class_weights else None
+    class_weights = compute_class_weights(train_ds.label_frames()) if cfg.use_class_weights else None
     if class_weights is not None:
         print(f"Pesos de clase {[DIR_INV[i] for i in range(3)]}: {class_weights.tolist()}")
 
-    train_loader = DataLoader(train_ds, batch_size=CFG.batch_size, shuffle=True,
-                              num_workers=CFG.num_workers, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=CFG.batch_size, shuffle=False,
-                            num_workers=CFG.num_workers, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,
+                              num_workers=cfg.num_workers, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False,
+                            num_workers=cfg.num_workers, pin_memory=True)
 
     model = MotorControlGRU(
-        neck_hidden=tuple(CFG.neck_hidden), dropout=CFG.dropout,
-        rnn_type=CFG.rnn_type, rnn_hidden=CFG.rnn_hidden, rnn_layers=CFG.rnn_layers,
-        lr=CFG.lr, lambda_speed=CFG.lambda_speed, weight_decay=CFG.weight_decay,
-        scheduler_step=CFG.scheduler_step, scheduler_gamma=CFG.scheduler_gamma,
+        neck_hidden=tuple(cfg.neck_hidden), dropout=cfg.dropout,
+        rnn_type=cfg.rnn_type, rnn_hidden=cfg.rnn_hidden, rnn_layers=cfg.rnn_layers,
+        lr=cfg.lr, lambda_speed=cfg.lambda_speed, weight_decay=cfg.weight_decay,
+        scheduler_step=cfg.scheduler_step, scheduler_gamma=cfg.scheduler_gamma,
         class_weights=class_weights,
     )
 
-    csv_logger = CSVLogger(save_dir="logs", name="MotorControlGRU")
-    checkpoint_callback = ModelCheckpoint(monitor='val_dir_f1_macro', mode='max', save_top_k=1,
-                                          dirpath='checkpoints/',
-                                          filename='motorgru-{epoch:02d}-{val_dir_f1_macro:.3f}')
-    lr_monitor = LearningRateMonitor(logging_interval='epoch')
-    trainer = pl.Trainer(max_epochs=CFG.max_epochs, accelerator='gpu', devices=1, logger=csv_logger,
-                         callbacks=[checkpoint_callback, lr_monitor], precision='16-mixed')
-
-    print(f"\n🚀 ENTRENANDO MotorControlGRU ({CFG.rnn_type}) 🚀")
+    trainer, csv_logger, checkpoint_callback = make_trainer(cfg, out, ckpt_prefix="motorgru")
+    print(f"\n🚀 ENTRENANDO {tag} (MotorControlGRU / {cfg.rnn_type}) 🚀")
     trainer.fit(model, train_loader, val_loader)
 
     plot_training_progress(os.path.join(csv_logger.log_dir, "metrics.csv"),
-                           out_png="training_progress_gru.png")
+                           out_png=os.path.join(out, "training_progress.png"), cfg=cfg)
     best = checkpoint_callback.best_model_path
     if best and os.path.exists(best):
         print(f"\nEvaluando mejor checkpoint: {best}")
         model = MotorControlGRU.load_from_checkpoint(best, class_weights=class_weights)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    evaluate_and_plot(model, val_loader, device, out_png="eval_confusion_gru.png")
-
-
-if __name__ == "__main__":
-    torch.set_float32_matmul_precision('medium')
-    main()
+    evaluate_and_plot(model, val_loader, device,
+                      out_png=os.path.join(out, "eval_confusion.png"),
+                      report_path=os.path.join(out, "report.txt"), cfg=cfg)
+    print(f"\n✅ {tag} listo. Resultados en {out}/")
