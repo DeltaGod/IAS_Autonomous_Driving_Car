@@ -7,7 +7,7 @@ se ve de un vistazo qué código produjo qué resultado.
 
 ## Cómo está organizado el código
 
-- **Entrypoints (un archivo = un modelo):** `model_00_baseline.py` … `model_08_signed_f1.py`.
+- **Entrypoints (un archivo = un modelo):** `model_00_baseline.py` … `model_09_hybrid.py`.
   Cada uno arma una `Config` congelada (los hiperparámetros que DEFINEN ese modelo, visibles
   al abrir el archivo) y llama a `run_experiment(CFG, "model_NN_...")`.
 - **Motores compartidos (no se corren directo):**
@@ -15,6 +15,8 @@ se ve de un vistazo qué código produjo qué resultado.
   - `nn_sequence.py` — Dataset de secuencias + `MotorControlGRU` (CNN+GRU/LSTM). Hereda de `nn_perframe`.
   - `nn_signed.py` — `SignedControlNet` (per-frame, target = PWM CON SIGNO ∈[-100,100], 2 salidas
     continuas). Loss = L1 ponderada por dirección; métrica nativa = MAE-PWM-con-signo + full-stop recall.
+  - `nn_hybrid.py` — `HybridControlNet` (per-frame, signed + cabeza binaria "is-stop" por motor).
+    Loss = L1(signed) + λ·BCE(is-stop, pos_weight por motor). Decode: STOP si is-stop>0.5, si no signo(signed).
 - **Generadores de datos:** `build_global_csv.py` (dir+speed → `dataset_train.csv`/`dataset_val.csv`),
   `build_signed_csv.py` (envuelve al anterior y produce el target con signo → `dataset_*_signed.csv`).
 - `config.py` — define la dataclass `Config` (el esquema de parámetros). Los modelos la
@@ -52,6 +54,7 @@ Métrica principal = **F1 macro de dirección por motor** (3 clases). Velocidad 
 | 06 | signed (sel. MAE) † | `model_06_signed.py` | 0.43 / 0.54 | **0.08 / 0.09** | **0.76 / 0.74** | 16.4 / 21.7 |
 | 07 | LSTM anti-redun | `model_07_lstm_antiredun.py` | 0.52 / 0.56 | 0.50 / 0.55 | 0.30 / 0.30 | 17.3 / 18.7 |
 | 08 | signed (sel. F1, pesos suaves) † | `model_08_signed_f1.py` | 0.42 / 0.50 | **0.07 / 0.08** | 0.63 / 0.58 | 17.7 / 21.5 |
+| 09 | híbrido signed + is-stop † | `model_09_hybrid.py` | 0.45 / 0.33 | 0.13 / **0.96** | 0.53 / 0.20 | 18.4 / 22.6 |
 
 † **Modelos signed (06, 08):** el target es PWM con signo (1 salida continua/motor), no clasificación.
 La dirección de la tabla se **decodifica** del signo (umbral 1 PWM) para comparar; la columna MAE es
@@ -92,11 +95,19 @@ lo supera en F1 global. Observaciones:
   el backward solo le bajó su recall (0.76→0.63) sin rescatar STOP. **Conclusión: el colapso de STOP en
   el modelo signed es ESTRUCTURAL** (la regresión-a-cero no se detecta por umbral; ninguna ponderación
   ni criterio de selección lo arregla). El fix real sería arquitectónico: salida signed + una cabeza
-  auxiliar "is-stop" (híbrido). Para esta tarea, la **clasificación explícita de dirección del per-frame
-  (01) sigue siendo superior**.
+  auxiliar "is-stop" (híbrido).
+- **09 (híbrido signed + is-stop)** valida ese fix: la cabeza binaria explícita **SÍ detecta el cero** y
+  sube el full-stop recall de **0.025 → 0.21** (8×) — el colapso de STOP del signed **es solucionable**.
+  PERO la primera config **se pasa de rosca**: el `pos_weight` del motor B (6.5×, porque casi nunca para)
+  hace que su cabeza is-stop **sobre-prediga STOP** (recall 0.96) y mate FORWARD (0.12) → el F1 macro cae a
+  0.39 (el más bajo). El mecanismo funciona; falta **calibrarlo** (bajar `lambda_stop`/`pos_weight`).
+  Pasó de problema ESTRUCTURAL a problema de TUNING.
 
-La palanca `class_weight_power` (config.py) y `build_signed_csv.py` son los aportes de código de este
-experimento (los viejos quedaron intactos).
+Para esta tarea, la **clasificación explícita de dirección del per-frame (01) sigue siendo superior** a
+todo el árbol signed/temporal.
+
+Las palancas `class_weight_power` y `lambda_stop` (config.py), `build_signed_csv.py`, `nn_signed.py` y
+`nn_hybrid.py` son los aportes de código de este experimento (los viejos quedaron intactos).
 
 **Veredicto:** el techo es el DATO, no la arquitectura. Detalle en
 `memory/temporal-model-results.md`.

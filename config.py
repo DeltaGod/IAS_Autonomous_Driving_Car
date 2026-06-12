@@ -52,6 +52,7 @@ class Config:
     # 0.5 = raíz cuadrada (modera la clase rara: backward ~6x -> ~2.5x), 0.0 = uniforme.
     class_weight_power: float = 1.0
     lambda_speed: float = 1.0         # peso de la regresión de velocidad en la loss total
+    lambda_stop: float = 1.0          # (modelo híbrido) peso de la BCE de la cabeza "is-stop"
 
     # ===================== ARQUITECTURA DEL MODELO =====================
     backbone_frozen: bool = True      # congelar el feature extractor de MobileNetV3
