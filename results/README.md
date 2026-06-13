@@ -111,3 +111,21 @@ Las palancas `class_weight_power` y `lambda_stop` (config.py), `build_signed_csv
 
 **Veredicto:** el techo es el DATO, no la arquitectura. Detalle en
 `memory/temporal-model-results.md`.
+
+## Exploración de hiperparámetros — `sweep.py`
+
+`sweep.py` es un explorador GENÉRICO (sirve para cualquier motor) que barre una grilla,
+corre cada config en un **subproceso aislado** (evita acumular memoria CUDA), y deja todo
+en `results/sweeps/<nombre>/` (NO pisa los `results/model_NN/`). Produce:
+- `sweep_summary.csv` (1 fila/config, métricas del mejor checkpoint),
+- `pareto.png` (frontera de **Pareto F1-macro vs full-stop-recall** — porque el F1 solo no
+  protege el frenado: rankea al 08 que no frena sobre el 09 que sí),
+- `param_effects.png` (efecto marginal de cada parámetro),
+- `reseed_summary.csv` (**anti-ruido**: re-corre los finalistas con varias seeds → media±desvío,
+  para ver si la ventaja sobrevive al ruido del val ±0.05).
+
+Sweeps definidos (editar la grilla en la función correspondiente):
+- `model09_sweep()` → `m09_tier2`: 36 configs del híbrido (`lambda_stop`×`stop_pos_weight_cap`×`neck_hidden`×`dropout`).
+- `model01_sweep()` → `m01_perframe`: 24 configs del per-frame (`neck_hidden`×`dropout`×`lr`×`weight_decay`).
+
+Correr: `python3 sweep.py --which m09` (o `m01`). Smoke rápido: `--smoke`.

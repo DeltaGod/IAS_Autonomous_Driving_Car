@@ -184,11 +184,16 @@ class MotorControlNet(pl.LightningModule):
         f1B = f1_score(s["dirB_t"], s["dirB_p"], average='macro', labels=[0, 1, 2], zero_division=0)
         maeA = np.abs(s["spdA_p"] - s["spdA_t"]).mean() * SPEED_SCALE
         maeB = np.abs(s["spdB_p"] - s["spdB_t"]).mean() * SPEED_SCALE
+        # recall de full-stop conjunto (ambos motores STOP a la vez) — métrica de seguridad
+        true_stop = (s["dirA_t"] == 0) & (s["dirB_t"] == 0)
+        pred_stop = (s["dirA_p"] == 0) & (s["dirB_p"] == 0)
+        fs = float((pred_stop & true_stop).sum() / true_stop.sum()) if true_stop.sum() else 0.0
         self.log('val_f1_A', f1A, prog_bar=True)
         self.log('val_f1_B', f1B, prog_bar=True)
         self.log('val_dir_f1_macro', (f1A + f1B) / 2, prog_bar=True)
         self.log('val_mae_A', maeA, prog_bar=True)
         self.log('val_mae_B', maeB, prog_bar=True)
+        self.log('val_fullstop_recall', fs, prog_bar=True)
 
     def configure_optimizers(self):
         opt = torch.optim.AdamW(filter(lambda p: p.requires_grad, self.parameters()),

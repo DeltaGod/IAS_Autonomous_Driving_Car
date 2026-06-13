@@ -252,6 +252,9 @@ def run_experiment(cfg, tag, results_dir="results"):
     for col in ["behaviorA", "behaviorB"]:
         p_stop = (frames[col] == "STOP").mean()
         stop_pw.append((1 - p_stop) / p_stop if p_stop > 0 else 1.0)
+    cap = getattr(cfg, "stop_pos_weight_cap", 0.0)
+    if cap and cap > 0:
+        stop_pw = [min(x, cap) for x in stop_pw]   # tope para que el motor B no sobre-pare
     stop_pos_weight = torch.tensor(stop_pw, dtype=torch.float32)
     print(f"Pesos L1 dir (power={power}): {[round(x,2) for x in dir_weights.tolist()]} | "
           f"pos_weight is-stop [A,B]: {[round(x,2) for x in stop_pw]}")
