@@ -1,0 +1,2 @@
+tag,n_seeds,val_dir_f1_macro_mean,val_dir_f1_macro_std,val_fullstop_recall_mean,val_fullstop_recall_std
+15_ls0.5_spwc2.0_nh512-256_d0.5,3,0.5345,0.0164,0.2951,0.0706
